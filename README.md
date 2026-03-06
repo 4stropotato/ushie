@@ -1,11 +1,5 @@
 # ushie
 
-Minimal PowerShell toolkit to undo common "debloat/tweak" changes that cause:
-- input lag (typing/click delay)
-- game stutter/frame pacing issues
-- desktop sluggishness
-
-This kit does **not** touch Razer services.
 
 ## Files
 - `scripts/Run-AllInOne.ps1` - single all-in-one script (apply + verify)
