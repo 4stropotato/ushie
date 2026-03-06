@@ -21,6 +21,7 @@ $startTime = Get-Date
 $script:dotaIP = $null
 $script:dotaLastDetect = [datetime]::MinValue
 $script:dotaMisses = 0
+$script:dotaConsoleLogPath = $null
 $script:PrivateIPv4Pattern = '^(127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.)'
 
 # Enable ANSI/VT escape processing so cursor positioning works in modern consoles.
@@ -79,6 +80,70 @@ function Get-DotaUdpPorts {
     } catch {}
 
     return @()
+}
+
+function Get-DotaConsoleLogPath {
+    if ($script:dotaConsoleLogPath -and (Test-Path $script:dotaConsoleLogPath)) {
+        return $script:dotaConsoleLogPath
+    }
+
+    $candidates = [System.Collections.Generic.List[string]]::new()
+
+    try {
+        $proc = Get-DotaProcess
+        if ($null -ne $proc -and $proc.Path) {
+            $binDir = Split-Path -Path $proc.Path -Parent
+            $gameDir = Split-Path -Path (Split-Path -Path $binDir -Parent) -Parent
+            if ($gameDir) {
+                $candidates.Add((Join-Path $gameDir 'dota\\console.log'))
+            }
+        }
+    } catch {}
+
+    $steamDefault = "$env:ProgramFiles(x86)\\Steam\\steamapps\\common\\dota 2 beta\\game\\dota\\console.log"
+    $steamAlt = "$env:ProgramFiles\\Steam\\steamapps\\common\\dota 2 beta\\game\\dota\\console.log"
+    $candidates.Add($steamDefault)
+    $candidates.Add($steamAlt)
+
+    foreach ($cand in $candidates) {
+        if ([string]::IsNullOrWhiteSpace($cand)) { continue }
+        if (Test-Path $cand) {
+            $script:dotaConsoleLogPath = $cand
+            return $cand
+        }
+    }
+
+    return $null
+}
+
+function Get-DotaServerIPFromConsoleLog {
+    $proc = Get-DotaProcess
+    if ($null -eq $proc) { return $null }
+
+    $logPath = Get-DotaConsoleLogPath
+    if (-not $logPath) { return $null }
+
+    try {
+        $meta = Get-Item -Path $logPath -ErrorAction SilentlyContinue
+        if ($null -eq $meta) { return $null }
+
+        $lines = Get-Content -Path $logPath -Tail 2000 -ErrorAction SilentlyContinue
+        if (-not $lines) { return $null }
+
+        for ($i = $lines.Count - 1; $i -ge 0; $i--) {
+            $line = $lines[$i]
+            if ($line -match 'SteamNetSockets.*Selecting\s+\S+\s+\((\d{1,3}(?:\.\d{1,3}){3}):\d+\)\s+as\s+primary') {
+                $ip = $matches[1]
+                if ($ip -notmatch $script:PrivateIPv4Pattern) { return $ip }
+            }
+            if ($line -match 'SteamNetSockets.*Requesting\s+session\s+from\s+\S+\s+\((\d{1,3}(?:\.\d{1,3}){3}):\d+\).*Rank=1') {
+                $ip = $matches[1]
+                if ($ip -notmatch $script:PrivateIPv4Pattern) { return $ip }
+            }
+        }
+    } catch {}
+
+    return $null
 }
 
 function Get-DotaServerIPFromNetstat([int[]]$LocalPorts) {
@@ -210,6 +275,11 @@ function Get-DotaServerIPFromRawSniff([int[]]$LocalPorts) {
 
 function Get-DotaServerIP {
     $localPorts = Get-DotaUdpPorts
+
+    # Most reliable for Source 2 SDR: parse latest relay from Dota console.log.
+    $fromLog = Get-DotaServerIPFromConsoleLog
+    if ($null -ne $fromLog) { return $fromLog }
+
     if ($localPorts.Count -eq 0) { return $null }
 
     # Fast path: connected UDP endpoints visible in netstat.
