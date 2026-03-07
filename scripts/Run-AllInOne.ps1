@@ -149,6 +149,26 @@ function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
     Write-Host ((Paint $tag $color) + " " + (Paint ($Name + ": ") $S.Gray) + $Value)
 }
 
+function Prompt-RestartNow {
+    $canPrompt = $false
+    try {
+        $canPrompt = ($Host.Name -eq "ConsoleHost" -and -not [Console]::IsInputRedirected)
+    } catch {
+        $canPrompt = ($Host.Name -eq "ConsoleHost")
+    }
+
+    if (-not $canPrompt) { return }
+
+    Write-Host (Paint "   >>> PRESS ENTER TO RESTART NOW (TYPE N THEN ENTER TO SKIP) <<<" $S.Yellow)
+    $answer = Read-Host "   Restart now?"
+    if ([string]::IsNullOrWhiteSpace($answer) -or $answer.Trim().ToLowerInvariant() -eq "y") {
+        Write-Host (Paint "   >>> Restarting now..." $S.Yellow)
+        shutdown /r /t 0 | Out-Null
+    } else {
+        Write-Host (Paint "   >>> Restart skipped. Reboot later to finalize changes." $S.Gray)
+    }
+}
+
 function Set-MaxPerformancePlan {
     $ultimate = "e9a42b02-d5df-448d-aa00-03f14749eb61"
     $guid = ""
@@ -1225,4 +1245,4 @@ if (-not $SkipVerify) {
 Write-Host ""
 Write-Host (Paint "   >>> USHIE PASS COMPLETE. NO PERSISTENT BACKGROUND TASK CREATED <<<" $S.Green)
 Write-Host ((Paint "   >>> BACKUP PATH: " $S.Cyan) + $backupDir)
-Write-Host (Paint "   >>> RESTART NOW TO LOCK IN FULL GAMING BOOST <<<" $S.Yellow)
+Prompt-RestartNow

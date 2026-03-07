@@ -115,5 +115,6 @@ Notes:
 ## Notes
 - This is one-shot only (no persistent background task is created).
 - Some changes require reboot.
+- At the end of apply mode, script prompts: `Press Enter to restart now` (type `N` to skip).
 - `Extreme` can reduce indexing/background features to prioritize responsiveness.
 - If lag remains even after this and clean driver install, use a clean official non-debloated Windows image.
