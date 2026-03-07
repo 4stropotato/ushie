@@ -22,6 +22,7 @@ $script:dotaIP = $null
 $script:dotaPop = $null
 $script:dotaLastDetect = [datetime]::MinValue
 $script:dotaMisses = 0
+$script:CurrentSpikeMs = $SpikeMs
 $script:dotaConsoleLogPath = $null
 $script:PrivateIPv4Pattern = '^(127\.|0\.|10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.|169\.254\.)'
 
@@ -329,6 +330,16 @@ function Get-DotaServerIP {
     return $raw
 }
 
+function Get-AutoSpikeMs([string]$Pop, [int]$FallbackMs) {
+    if ([string]::IsNullOrWhiteSpace($Pop)) { return $FallbackMs }
+    $p = $Pop.ToLowerInvariant()
+
+    if ($p -match '^(tyo|jpn)#') { return 50 }
+    if ($p -match '^(seo|icn|kor)#') { return 70 }
+    if ($p -match '^(sgp|sin|hkg|man|sea)#') { return 90 }
+    return 80
+}
+
 function Write-PinnedLine([string]$text, [string]$color) {
     $width = 80
     try {
@@ -353,7 +364,7 @@ function Write-PingPinned([string]$ts, [string]$label, $ms, [int]$spike) {
     }
 }
 
-function Get-Stats([System.Collections.Generic.List[PSCustomObject]]$data) {
+function Get-Stats([System.Collections.Generic.List[PSCustomObject]]$data, [int]$ThresholdMs) {
     $total = $data.Count
     if ($total -eq 0) { return $null }
 
@@ -368,7 +379,7 @@ function Get-Stats([System.Collections.Generic.List[PSCustomObject]]$data) {
         $avg = "$([math]::Round(($vals | Measure-Object -Average).Average, 1))ms"
         $min = "$(($vals | Measure-Object -Minimum).Minimum)ms"
         $max = "$(($vals | Measure-Object -Maximum).Maximum)ms"
-        $spikes = ($vals | Where-Object { $_ -ge $SpikeMs }).Count
+        $spikes = ($vals | Where-Object { $_ -ge $ThresholdMs }).Count
 
         if ($vals.Count -gt 1) {
             $diffs = for ($i = 1; $i -lt $vals.Count; $i++) {
@@ -401,7 +412,7 @@ Write-Host "  ==========================================" -ForegroundColor Cyan
 Write-Host "  Ref1     : $Ref1" -ForegroundColor Gray
 Write-Host "  Ref2     : $Ref2" -ForegroundColor Gray
 Write-Host "  Dota     : auto-detecting (queue a match first)" -ForegroundColor Gray
-Write-Host "  Interval : ${IntervalMs}ms   Spike: >=${SpikeMs}ms" -ForegroundColor Gray
+Write-Host "  Interval : ${IntervalMs}ms   Spike: auto (base >=${SpikeMs}ms)" -ForegroundColor Gray
 Write-Host "  Started  : $($startTime.ToString('yyyy-MM-dd HH:mm:ss'))" -ForegroundColor Gray
 Write-Host "  Ctrl+C to stop and generate report." -ForegroundColor Gray
 Write-Host ""
@@ -450,6 +461,8 @@ try {
             $script:dotaLastDetect = Get-Date
         }
 
+        $script:CurrentSpikeMs = Get-AutoSpikeMs -Pop $script:dotaPop -FallbackMs $SpikeMs
+
         $msD = $null
         if ($null -ne $script:dotaIP) {
             $msD = Ping-Once $script:dotaIP
@@ -459,13 +472,13 @@ try {
         if ($script:UsePinnedConsole -and $pingRow -ge 0) {
             try {
                 [Console]::SetCursorPosition(0, $pingRow)
-                Write-PingPinned $ts $Ref1 $ms1 $SpikeMs
-                Write-PingPinned $ts $Ref2 $ms2 $SpikeMs
+                Write-PingPinned $ts $Ref1 $ms1 $script:CurrentSpikeMs
+                Write-PingPinned $ts $Ref2 $ms2 $script:CurrentSpikeMs
                 if ($null -eq $script:dotaIP) {
                     Write-PinnedLine "  [$ts] Dota server           -- detecting... queue a match" "Gray"
                 } else {
                     $relayLabel = if ($script:dotaPop) { "ValveRelay:$($script:dotaPop) $($script:dotaIP)" } else { "ValveRelay:$($script:dotaIP)" }
-                    Write-PingPinned $ts $relayLabel $msD $SpikeMs
+                    Write-PingPinned $ts $relayLabel $msD $script:CurrentSpikeMs
                 }
             } catch {
                 $script:UsePinnedConsole = $false
@@ -473,13 +486,13 @@ try {
         }
 
         if (-not $script:UsePinnedConsole) {
-            Write-PingPinned $ts $Ref1 $ms1 $SpikeMs
-            Write-PingPinned $ts $Ref2 $ms2 $SpikeMs
+            Write-PingPinned $ts $Ref1 $ms1 $script:CurrentSpikeMs
+            Write-PingPinned $ts $Ref2 $ms2 $script:CurrentSpikeMs
             if ($null -eq $script:dotaIP) {
                 Write-PinnedLine "  [$ts] Dota server           -- detecting... queue a match" "Gray"
             } else {
                 $relayLabel = if ($script:dotaPop) { "ValveRelay:$($script:dotaPop) $($script:dotaIP)" } else { "ValveRelay:$($script:dotaIP)" }
-                Write-PingPinned $ts $relayLabel $msD $SpikeMs
+                Write-PingPinned $ts $relayLabel $msD $script:CurrentSpikeMs
             }
         }
 
@@ -492,9 +505,10 @@ finally {
     $endTime = Get-Date
     $duration = $endTime - $startTime
 
-    $s1 = Get-Stats $r1
-    $s2 = Get-Stats $r2
-    $sD = if ($rD.Count -gt 0) { Get-Stats $rD } else { $null }
+    $finalSpikeMs = $script:CurrentSpikeMs
+    $s1 = Get-Stats $r1 $finalSpikeMs
+    $s2 = Get-Stats $r2 $finalSpikeMs
+    $sD = if ($rD.Count -gt 0) { Get-Stats $rD $finalSpikeMs } else { $null }
 
     Write-Host "  ==================== SUMMARY ====================" -ForegroundColor Cyan
     Write-Host ("  Duration : {0:hh\:mm\:ss}" -f $duration) -ForegroundColor White
@@ -511,7 +525,7 @@ finally {
         Write-Host ("    Loss   : {0}/{1} ({2}%)" -f $s.Lost, $s.Total, $s.LossPct)
         Write-Host ("    Avg    : {0}   Min: {1}   Max: {2}" -f $s.Avg, $s.Min, $s.Max)
         Write-Host ("    Jitter : {0}" -f $s.Jitter)
-        Write-Host ("    Spikes : {0} (>= ${SpikeMs}ms)" -f $s.Spikes)
+        Write-Host ("    Spikes : {0} (>= {1}ms)" -f $s.Spikes, $finalSpikeMs)
         Write-Host ""
     }
 
@@ -525,7 +539,7 @@ finally {
     $lines.Add("Ref1     : $Ref1")
     $lines.Add("Ref2     : $Ref2")
     $lines.Add("Dota     : $(if ($script:dotaIP) { if ($script:dotaPop) { "$($script:dotaPop) $($script:dotaIP)" } else { $script:dotaIP } } else { 'not detected' })")
-    $lines.Add("Spike threshold: ${SpikeMs}ms")
+    $lines.Add("Spike threshold (final): ${finalSpikeMs}ms (base ${SpikeMs}ms)")
     $lines.Add("")
     $lines.Add("--- SUMMARY ---")
 
@@ -540,7 +554,7 @@ finally {
         $lines.Add("  Loss   : $($s.Lost)/$($s.Total) ($($s.LossPct)%)")
         $lines.Add("  Avg    : $($s.Avg)   Min: $($s.Min)   Max: $($s.Max)")
         $lines.Add("  Jitter : $($s.Jitter)")
-        $lines.Add("  Spikes : $($s.Spikes) (>= ${SpikeMs}ms)")
+        $lines.Add("  Spikes : $($s.Spikes) (>= ${finalSpikeMs}ms)")
         $lines.Add("")
     }
 
