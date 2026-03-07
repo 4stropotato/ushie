@@ -3,6 +3,7 @@
 
 ## Files
 - `scripts/Run-AllInOne.ps1` - single all-in-one script (apply + verify)
+- `scripts/Watch-Network.ps1` - live Dota latency monitor (auto relay detect + session grading)
 
 ## Run (Administrator PowerShell)
 ```powershell
@@ -51,6 +52,22 @@ Manual / Help:
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/Run-AllInOne.ps1'))) -h"
 ```
+
+## Network Watch (Dota)
+Run locally (Admin PowerShell):
+```powershell
+.\scripts\Watch-Network.ps1
+```
+
+Wireshark-like deep capture mode (ETL + optional PCAP export):
+```powershell
+.\scripts\Watch-Network.ps1 -DeepCapture
+```
+
+Notes:
+- `-DeepCapture` uses built-in Windows trace capture (`netsh trace`) and auto-stops when you stop the watcher (`Ctrl+C`).
+- If `etl2pcapng.exe` or `pktmon.exe` conversion succeeds, a `.pcapng` is also saved.
+- Capture files are written to `Desktop\ushie_deepcap_YYYYMMDD_HHMMSS\`.
 
 ## What It Changes
 - Removes `OverlayTestMode` from DWM.
