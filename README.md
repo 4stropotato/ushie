@@ -70,6 +70,7 @@ Test + auto-remediate (post-session, default behavior):
 ```
 
 Notes:
+- Watcher match states include: `LOBBY`, `FINDING_MATCH`, `ACCEPTING_MATCH`, `CONNECTING`, `INGAME`, `OFFLINE`.
 - `-DeepCapture` uses built-in Windows trace capture (`netsh trace`) and auto-stops when you stop the watcher (`Ctrl+C`).
 - If `etl2pcapng.exe` or `pktmon.exe` conversion succeeds, a `.pcapng` is also saved.
 - Default output is temporary (`%TEMP%\ushie\run_*`) and auto-cleaned after run.

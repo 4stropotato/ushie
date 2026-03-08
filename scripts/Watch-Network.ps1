@@ -294,6 +294,49 @@ function Get-UiSimpleState([string]$UiToken) {
     }
 }
 
+function Get-MatchmakingStateFromRecentLines([string[]]$Lines) {
+    if ($null -eq $Lines -or $Lines.Count -eq 0) { return $null }
+
+    $recent = if ($Lines.Count -gt 400) {
+        @($Lines[($Lines.Count - 400)..($Lines.Count - 1)])
+    } else {
+        @($Lines)
+    }
+
+    $idxDashboard = -1
+    $idxFind = -1
+    $idxAccept = -1
+    $idxConnect = -1
+
+    for ($i = 0; $i -lt $recent.Count; $i++) {
+        $line = $recent[$i]
+        if ($line -match 'ChangeGameUIState:\s+\S+\s+->\s+DOTA_GAME_UI_STATE_DASHBOARD') {
+            $idxDashboard = $i
+            continue
+        }
+        if ($line -match 'Send msg\s+7070\s+\(k_EMsgGCReadyUp\)') {
+            $idxAccept = $i
+            continue
+        }
+        if ($line -match 'k_EMsgGCReadyUpStatus') {
+            $idxFind = $i
+            continue
+        }
+        if ($line -match 'LOBBY STATE RUN:.*connecting to MatchID|QueueNewRequest\(\s*Remote Connect|SwitchToLoop remoteconnect|CLoopModeRemoteConnect') {
+            $idxConnect = $i
+            continue
+        }
+    }
+
+    $latest = [Math]::Max([Math]::Max($idxDashboard, $idxFind), [Math]::Max($idxAccept, $idxConnect))
+    if ($latest -lt 0) { return $null }
+    if ($latest -eq $idxDashboard) { return "LOBBY" }
+    if ($latest -eq $idxConnect) { return "CONNECTING" }
+    if ($latest -eq $idxAccept) { return "ACCEPTING_MATCH" }
+    if ($latest -eq $idxFind) { return "FINDING_MATCH" }
+    return $null
+}
+
 function Get-SdrMetricsFromLine([string]$Line) {
     if ([string]::IsNullOrWhiteSpace($Line)) { return $null }
 
@@ -382,7 +425,14 @@ function Get-DotaServerIPFromConsoleLog {
             }
         }
 
-        if ($uiState -eq "LOBBY") {
+        $queueState = Get-MatchmakingStateFromRecentLines -Lines $lines
+        if ($uiState -eq "LOBBY" -and $queueState) {
+            $uiState = $queueState
+        } elseif ($uiState -eq "UNKNOWN" -and $queueState) {
+            $uiState = $queueState
+        }
+
+        if ($uiState -in @("LOBBY", "FINDING_MATCH", "ACCEPTING_MATCH")) {
             return [PSCustomObject]@{
                 UiState = $uiState; UiToken = $uiToken
                 IP = $null; Pop = $null; Region = "Unknown"
@@ -609,7 +659,7 @@ function Get-DotaServerIP {
     }
 
     # Log can say LOBBY / OFFLINE. In that case do not force old relay.
-    if ($null -ne $fromLog -and ($fromLog.UiState -in @("LOBBY", "OFFLINE"))) {
+    if ($null -ne $fromLog -and ($fromLog.UiState -in @("LOBBY", "FINDING_MATCH", "ACCEPTING_MATCH", "OFFLINE"))) {
         $script:dotaPop = $null
         $script:dotaRegion = "Unknown"
         return $null
