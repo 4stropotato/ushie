@@ -75,6 +75,8 @@ public static class UshieHeaderSpinnerHost
     static int Index;
     static int Row = -1;
     static string Text = "";
+    static string Color = "";
+    static string Reset = "";
 
     static int Width()
     {
@@ -101,19 +103,21 @@ public static class UshieHeaderSpinnerHost
                 string frame = Frames[Index % Frames.Length];
                 Index++;
                 Console.SetCursorPosition(0, Row);
-                Console.Write(Pad("   " + frame + "  " + Text));
+                Console.Write(Color + Pad("   " + frame + "  " + Text) + Reset);
                 Console.Out.Flush();
                 Console.SetCursorPosition(left, top);
             } catch {}
         }
     }
 
-    public static void Start(int row, string text, string[] frames, int intervalMs)
+    public static void Start(int row, string text, string color, string reset, string[] frames, int intervalMs)
     {
         lock (Sync) {
             Stop();
             Row = row;
             Text = text ?? "";
+            Color = color ?? "";
+            Reset = reset ?? "";
             Frames = (frames != null && frames.Length > 0) ? frames : new[] { "|", "/", "-", "\\" };
             Index = 0;
             Timer = new Timer(Tick, null, 0, intervalMs);
@@ -129,6 +133,8 @@ public static class UshieHeaderSpinnerHost
             }
             Row = -1;
             Text = "";
+            Color = "";
+            Reset = "";
         }
     }
 }
@@ -294,7 +300,14 @@ function Start-HeaderSpinnerTimer {
     if (-not (Test-CanAnimate)) { return }
     if ($script:ActiveSectionRow -lt 0) { return }
     try {
-        [UshieHeaderSpinnerHost]::Start($script:ActiveSectionRow, $script:ActiveSectionText, (Get-UsableSpinnerFrames), 80)
+        [UshieHeaderSpinnerHost]::Start(
+            $script:ActiveSectionRow,
+            $script:ActiveSectionText,
+            $script:ActiveSectionColor,
+            $S.Reset,
+            (Get-UsableSpinnerFrames),
+            80
+        )
         $script:HeaderSpinnerActive = $true
     } catch {
         $script:HeaderSpinnerActive = $false
