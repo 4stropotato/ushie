@@ -281,10 +281,10 @@ function Complete-SectionSpinner {
 
     try {
         [Console]::SetCursorPosition(0, $script:ActiveSectionRow)
-        [Console]::Write((Format-SectionSpinnerLine -Frame " " -Text $script:ActiveSectionText -Color $script:ActiveSectionColor))
+        [Console]::Write(("".PadRight((Get-ConsoleWidth))))
         if ($script:ActiveDetailRow -ge 0) {
             [Console]::SetCursorPosition(0, $script:ActiveDetailRow)
-            [Console]::Write((Format-SectionDetailLine -Detail ""))
+            [Console]::Write(("".PadRight((Get-ConsoleWidth))))
         }
         [Console]::Out.Flush()
         [Console]::SetCursorPosition($currentLeft, $currentTop)
@@ -367,6 +367,7 @@ function Step([string]$Message) {
     $script:StepNo++
     $id = "{0:d2}" -f $script:StepNo
     if (-not $VerboseOutput) {
+        Complete-SectionSpinner
         Clear-Host
         Show-Banner
     } elseif ($script:StepNo -eq 1) {
@@ -1177,6 +1178,7 @@ function Verify-Section([string]$Title) {
     $script:CheckNo++
     $id = "{0:d2}" -f $script:CheckNo
     if (-not $VerboseOutput) {
+        Complete-SectionSpinner
         Clear-Host
         Show-Banner
     } elseif ($script:CheckNo -eq 1) {
@@ -1731,6 +1733,10 @@ if (-not $SkipVerify) {
 }
 
 Complete-SectionSpinner
+if (-not $VerboseOutput) {
+    Clear-Host
+    Show-Banner
+}
 Write-Host ""
 Write-Host (Paint "   >>> USHIE PASS COMPLETE. NO PERSISTENT BACKGROUND TASK CREATED <<<" $S.Green)
 Write-Host ((Paint "   >>> BACKUP PATH: " $S.Cyan) + $backupDir)
