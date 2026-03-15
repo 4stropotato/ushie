@@ -105,21 +105,15 @@ function Clear-LiveLine {
     Write-Host -NoNewline ("`r" + (" " * $width) + "`r")
 }
 
-function Show-LoadingPulse([string]$Kind, [string]$Message, [string]$AccentColor) {
+function Write-SpinnerStatus([string]$Detail, [int]$Tick, [string]$AccentColor) {
     if (-not (Test-CanAnimate)) { return }
 
     $width = Get-ConsoleWidth
-    $label = if ($Kind -eq "CHECK") { "checking" } else { "loading" }
     $frames = Get-SpinnerFrames
-
-    foreach ($frame in $frames) {
-        $prefix = Paint ("   {0}  " -f $frame) $AccentColor
-        $line = ($prefix + $label + " " + $Message).PadRight($width)
-        Write-Host -NoNewline ("`r" + $line)
-        Start-Sleep -Milliseconds 80
-    }
-
-    Clear-LiveLine
+    $frame = $frames[$Tick % $frames.Count]
+    $prefix = Paint ("   {0}  " -f $frame) $AccentColor
+    $line = ($prefix + $Detail).PadRight($width)
+    Write-Host -NoNewline ("`r" + $line)
 }
 
 function Invoke-ProcessWithSpinner([string]$FilePath, [string[]]$ArgumentList, [string]$Label, [string]$AccentColor) {
@@ -152,8 +146,6 @@ function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [strin
     $header = ("[{0} {1}] {2}" -f $Kind, $Id, $Message)
     $ruleWidth = [Math]::Min($width, [Math]::Max(($header.Length + 8), 54))
     $rule = ("-" * $ruleWidth)
-
-    Show-LoadingPulse -Kind $Kind -Message ("{0} {1} {2}" -f $Kind, $Id, $Message) -AccentColor $AccentColor
 
     Write-Host (Paint $header $AccentColor)
     Write-Host (Paint $rule $S.Slate)
@@ -650,12 +642,7 @@ function Resolve-DnsSelection {
         foreach ($k in $orderedKeys) {
             $providerIndex++
             if (Test-CanAnimate) {
-                $width = Get-ConsoleWidth
-                $spinnerFrames = Get-SpinnerFrames
-                $frame = $spinnerFrames[$providerIndex % $spinnerFrames.Count]
-                $prefix = Paint ("   {0}  " -f $frame) $S.NeonMint
-                $line = ($prefix + ("dns benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k)).PadRight($width)
-                Write-Host -NoNewline ("`r" + $line)
+                Write-SpinnerStatus -Detail ("dns benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k) -Tick $providerIndex -AccentColor $S.NeonMint
             } elseif (-not $VerboseOutput) {
                 Write-Host (Paint ("DNS benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k) $S.Gray)
             }
@@ -772,9 +759,16 @@ function Clear-TempAndCache([string]$CurrentProfile) {
         "$env:ProgramData\NVIDIA Corporation\NV_Cache\*"
     )
 
+    $cacheTick = 0
+    $baseCount = $basePatterns.Count
     foreach ($p in $basePatterns) {
+        $cacheTick++
+        if (Test-CanAnimate) {
+            Write-SpinnerStatus -Detail ("cleaning cache [{0}/{1}]" -f $cacheTick, $baseCount) -Tick $cacheTick -AccentColor $S.NeonMint
+        }
         Clear-PathPattern $p
     }
+    Clear-LiveLine
 
     # Optional deeper cleanup for aggressive one-shot pass.
     if ($CurrentProfile -eq "Extreme") {
@@ -784,9 +778,16 @@ function Clear-TempAndCache([string]$CurrentProfile) {
             "C:\Windows\SoftwareDistribution\Download\*",
             "C:\Windows\SoftwareDistribution\DeliveryOptimization\*"
         )
+        $deepCount = $deepPatterns.Count
+        $deepTick = 0
         foreach ($p in $deepPatterns) {
+            $deepTick++
+            if (Test-CanAnimate) {
+                Write-SpinnerStatus -Detail ("deep cleaning [{0}/{1}]" -f $deepTick, $deepCount) -Tick ($cacheTick + $deepTick) -AccentColor $S.NeonYellow
+            }
             Clear-PathPattern $p
         }
+        Clear-LiveLine
 
         # Winutil-aligned component cleanup; may take longer on first run.
         Write-Host (Paint "Running component cleanup (DISM). This can take several minutes..." $S.Yellow)
