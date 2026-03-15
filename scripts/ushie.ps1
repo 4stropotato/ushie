@@ -98,22 +98,14 @@ function Show-LoadingPulse([string]$Kind, [string]$Message, [string]$AccentColor
     if (-not (Test-CanAnimate)) { return }
 
     $width = Get-ConsoleWidth
-    $verb = if ($Kind -eq "CHECK") { "SCANNING" } else { "LOADING" }
-    $bars = @(
-        "[>           ]",
-        "[==>         ]",
-        "[====>       ]",
-        "[======>     ]",
-        "[========>   ]",
-        "[==========> ]",
-        "[=========== ]",
-        "[============]"
-    )
+    $label = if ($Kind -eq "CHECK") { "checking" } else { "loading" }
+    $frames = @("(|)", "(/)", "(-)", "(\)", "(|)", "(/)")
 
-    foreach ($bar in $bars) {
-        $line = ("   {0} {1} {2}" -f $verb, $bar, $Message).PadRight($width)
-        Write-Host -NoNewline ("`r" + (Paint $line $AccentColor))
-        Start-Sleep -Milliseconds 70
+    foreach ($frame in $frames) {
+        $prefix = Paint ("   {0} - " -f $frame) $AccentColor
+        $line = ($prefix + $label + " " + $Message).PadRight($width)
+        Write-Host -NoNewline ("`r" + $line)
+        Start-Sleep -Milliseconds 95
     }
 
     Clear-LiveLine
@@ -125,15 +117,16 @@ function Invoke-ProcessWithSpinner([string]$FilePath, [string[]]$ArgumentList, [
         return $proc.ExitCode
     }
 
-    $frames = @("|", "/", "-", "\")
+    $frames = @("(|)", "(/)", "(-)", "(\)")
     $width = Get-ConsoleWidth
     $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -WindowStyle Hidden -PassThru
     $i = 0
 
     while (-not $proc.HasExited) {
         $spinner = $frames[$i % $frames.Count]
-        $line = ("   {0} {1}" -f $spinner, $Label).PadRight($width)
-        Write-Host -NoNewline ("`r" + (Paint $line $AccentColor))
+        $prefix = Paint ("   {0} - " -f $spinner) $AccentColor
+        $line = ($prefix + $Label).PadRight($width)
+        Write-Host -NoNewline ("`r" + $line)
         Start-Sleep -Milliseconds 120
         try { $proc.Refresh() } catch {}
         $i++
@@ -149,7 +142,7 @@ function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [strin
     $ruleWidth = [Math]::Min($width, [Math]::Max(($header.Length + 8), 54))
     $rule = ("-" * $ruleWidth)
 
-    Show-LoadingPulse -Kind $Kind -Message $Message -AccentColor $AccentColor
+    Show-LoadingPulse -Kind $Kind -Message ("{0} {1} {2}" -f $Kind, $Id, $Message) -AccentColor $AccentColor
 
     Write-Host (Paint $header $AccentColor)
     Write-Host (Paint $rule $S.Slate)
@@ -647,8 +640,10 @@ function Resolve-DnsSelection {
             $providerIndex++
             if (Test-CanAnimate) {
                 $width = Get-ConsoleWidth
-                $line = ("   DNS BENCH [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k).PadRight($width)
-                Write-Host -NoNewline ("`r" + (Paint $line $S.NeonMint))
+                $frame = @("(|)", "(/)", "(-)", "(\)")[$providerIndex % 4]
+                $prefix = Paint ("   {0} - " -f $frame) $S.NeonMint
+                $line = ($prefix + ("dns benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k)).PadRight($width)
+                Write-Host -NoNewline ("`r" + $line)
             } elseif (-not $VerboseOutput) {
                 Write-Host (Paint ("DNS benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k) $S.Gray)
             }
