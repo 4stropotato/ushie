@@ -44,6 +44,9 @@ $script:CheckNo = 0
 $script:RunProfile = $Mode
 $script:DnsSelection = "<not set>"
 $script:StateRoot = "HKCU:\Software\ushie\WinLagFix"
+$script:ActiveSectionRow = -1
+$script:ActiveSectionText = ""
+$script:ActiveSectionColor = $null
 
 function Paint([string]$Text, [string]$Color) {
     if (-not $Color) { return $Text }
@@ -105,15 +108,53 @@ function Clear-LiveLine {
     Write-Host -NoNewline ("`r" + (" " * $width) + "`r")
 }
 
-function Write-SpinnerStatus([string]$Detail, [int]$Tick, [string]$AccentColor) {
-    if (-not (Test-CanAnimate)) { return }
-
+function Format-SectionSpinnerLine([string]$Frame, [string]$Text, [string]$Color, [string]$Detail = "") {
     $width = Get-ConsoleWidth
+    $lineText = ("   {0}  {1}" -f $Frame, $Text)
+    if (-not [string]::IsNullOrWhiteSpace($Detail)) {
+        $lineText += "   " + $Detail
+    }
+    return Paint ($lineText.PadRight($width)) $Color
+}
+
+function Start-SectionSpinner([string]$Text, [string]$Color) {
+    $script:ActiveSectionText = $Text
+    $script:ActiveSectionColor = $Color
+    $script:ActiveSectionRow = -1
+
+    $frames = Get-SpinnerFrames
+    $initialLine = Format-SectionSpinnerLine -Frame $frames[0] -Text $Text -Color $Color
+    Write-Host $initialLine
+
+    if (Test-CanAnimate) {
+        try {
+            $script:ActiveSectionRow = [Console]::CursorTop - 1
+        } catch {
+            $script:ActiveSectionRow = -1
+        }
+    }
+}
+
+function Update-SectionSpinner([string]$Detail, [int]$Tick) {
+    if (-not (Test-CanAnimate)) { return }
+    if ($script:ActiveSectionRow -lt 0) { return }
+
     $frames = Get-SpinnerFrames
     $frame = $frames[$Tick % $frames.Count]
-    $prefix = Paint ("   {0}  " -f $frame) $AccentColor
-    $line = ($prefix + $Detail).PadRight($width)
-    Write-Host -NoNewline ("`r" + $line)
+    $currentTop = [Console]::CursorTop
+    $currentLeft = [Console]::CursorLeft
+
+    try {
+        [Console]::SetCursorPosition(0, $script:ActiveSectionRow)
+        Write-Host -NoNewline (Format-SectionSpinnerLine -Frame $frame -Text $script:ActiveSectionText -Color $script:ActiveSectionColor -Detail $Detail)
+        [Console]::SetCursorPosition($currentLeft, $currentTop)
+    } catch {}
+}
+
+function Complete-SectionSpinner {
+    $script:ActiveSectionRow = -1
+    $script:ActiveSectionText = ""
+    $script:ActiveSectionColor = $null
 }
 
 function Invoke-ProcessWithSpinner([string]$FilePath, [string[]]$ArgumentList, [string]$Label, [string]$AccentColor) {
@@ -128,26 +169,20 @@ function Invoke-ProcessWithSpinner([string]$FilePath, [string[]]$ArgumentList, [
     $i = 0
 
     while (-not $proc.HasExited) {
-        $spinner = $frames[$i % $frames.Count]
-        $prefix = Paint ("   {0}  " -f $spinner) $AccentColor
-        $line = ($prefix + $Label).PadRight($width)
-        Write-Host -NoNewline ("`r" + $line)
+        Update-SectionSpinner -Detail $Label -Tick $i
         Start-Sleep -Milliseconds 120
         try { $proc.Refresh() } catch {}
         $i++
     }
-
-    Clear-LiveLine
     return $proc.ExitCode
 }
 
 function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [string]$AccentColor) {
     $width = Get-ConsoleWidth
-    $header = ("[{0} {1}] {2}" -f $Kind, $Id, $Message)
-    $ruleWidth = [Math]::Min($width, [Math]::Max(($header.Length + 8), 54))
+    $ruleWidth = [Math]::Min($width, [Math]::Max(($Message.Length + 8), 54))
     $rule = ("-" * $ruleWidth)
 
-    Write-Host (Paint $header $AccentColor)
+    Start-SectionSpinner -Text $Message -Color $AccentColor
     Write-Host (Paint $rule $S.Slate)
 }
 
@@ -626,7 +661,9 @@ function Resolve-DnsSelection {
     }
 
     if ($dnsMode -ieq "Auto") {
-        Write-Host (Paint "Benchmarking DNS providers..." $S.Gray)
+        if (-not (Test-CanAnimate)) {
+            Write-Host (Paint "Benchmarking DNS providers..." $S.Gray)
+        }
         $candidateMap = @{}
         foreach ($k in $presets.Keys) {
             $candidateMap[$k] = $presets[$k]
@@ -642,7 +679,7 @@ function Resolve-DnsSelection {
         foreach ($k in $orderedKeys) {
             $providerIndex++
             if (Test-CanAnimate) {
-                Write-SpinnerStatus -Detail ("dns benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k) -Tick $providerIndex -AccentColor $S.NeonMint
+                Update-SectionSpinner -Detail ("dns benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k) -Tick $providerIndex
             } elseif (-not $VerboseOutput) {
                 Write-Host (Paint ("DNS benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k) $S.Gray)
             }
@@ -660,7 +697,6 @@ function Resolve-DnsSelection {
                 ScoreMs = $score
             }
         }
-        Clear-LiveLine
         if ($rows.Count -eq 0) {
             throw "DNS auto benchmark failed to score candidates. Check network connectivity or use -DnsServers."
         }
@@ -764,11 +800,10 @@ function Clear-TempAndCache([string]$CurrentProfile) {
     foreach ($p in $basePatterns) {
         $cacheTick++
         if (Test-CanAnimate) {
-            Write-SpinnerStatus -Detail ("cleaning cache [{0}/{1}]" -f $cacheTick, $baseCount) -Tick $cacheTick -AccentColor $S.NeonMint
+            Update-SectionSpinner -Detail ("cleaning cache [{0}/{1}]" -f $cacheTick, $baseCount) -Tick $cacheTick
         }
         Clear-PathPattern $p
     }
-    Clear-LiveLine
 
     # Optional deeper cleanup for aggressive one-shot pass.
     if ($CurrentProfile -eq "Extreme") {
@@ -783,11 +818,10 @@ function Clear-TempAndCache([string]$CurrentProfile) {
         foreach ($p in $deepPatterns) {
             $deepTick++
             if (Test-CanAnimate) {
-                Write-SpinnerStatus -Detail ("deep cleaning [{0}/{1}]" -f $deepTick, $deepCount) -Tick ($cacheTick + $deepTick) -AccentColor $S.NeonYellow
+                Update-SectionSpinner -Detail ("deep cleaning [{0}/{1}]" -f $deepTick, $deepCount) -Tick ($cacheTick + $deepTick)
             }
             Clear-PathPattern $p
         }
-        Clear-LiveLine
 
         # Winutil-aligned component cleanup; may take longer on first run.
         Write-Host (Paint "Running component cleanup (DISM). This can take several minutes..." $S.Yellow)
