@@ -48,6 +48,7 @@ $script:ActiveSectionRow = -1
 $script:ActiveDetailRow = -1
 $script:ActiveSectionText = ""
 $script:ActiveSectionColor = $null
+$script:HeaderSpinnerActive = $false
 
 function Initialize-ConsoleRendering {
     try {
@@ -60,6 +61,79 @@ function Initialize-ConsoleRendering {
 }
 
 Initialize-ConsoleRendering
+
+if (-not ("UshieHeaderSpinnerHost" -as [type])) {
+    Add-Type @"
+using System;
+using System.Threading;
+
+public static class UshieHeaderSpinnerHost
+{
+    static readonly object Sync = new object();
+    static Timer Timer;
+    static string[] Frames = new[] { "|", "/", "-", "\\" };
+    static int Index;
+    static int Row = -1;
+    static string Text = "";
+
+    static int Width()
+    {
+        try { return Math.Max(Console.WindowWidth - 1, 72); }
+        catch { return 100; }
+    }
+
+    static string Pad(string value)
+    {
+        value = value ?? "";
+        int width = Width();
+        return value.Length < width ? value.PadRight(width) : value;
+    }
+
+    static void Tick(object state)
+    {
+        lock (Sync) {
+            if (Row < 0) return;
+            int left;
+            int top;
+            try {
+                left = Console.CursorLeft;
+                top = Console.CursorTop;
+                string frame = Frames[Index % Frames.Length];
+                Index++;
+                Console.SetCursorPosition(0, Row);
+                Console.Write(Pad("   " + frame + "  " + Text));
+                Console.Out.Flush();
+                Console.SetCursorPosition(left, top);
+            } catch {}
+        }
+    }
+
+    public static void Start(int row, string text, string[] frames, int intervalMs)
+    {
+        lock (Sync) {
+            Stop();
+            Row = row;
+            Text = text ?? "";
+            Frames = (frames != null && frames.Length > 0) ? frames : new[] { "|", "/", "-", "\\" };
+            Index = 0;
+            Timer = new Timer(Tick, null, 0, intervalMs);
+        }
+    }
+
+    public static void Stop()
+    {
+        lock (Sync) {
+            if (Timer != null) {
+                Timer.Dispose();
+                Timer = null;
+            }
+            Row = -1;
+            Text = "";
+        }
+    }
+}
+"@
+}
 
 function Paint([string]$Text, [string]$Color) {
     if (-not $Color) { return $Text }
@@ -161,12 +235,6 @@ function Start-SectionSpinner([string]$Text, [string]$Color, [switch]$UseDetailL
         } catch {
             $script:ActiveSectionRow = -1
         }
-        if ($script:ActiveSectionRow -ge 0) {
-            for ($i = 1; $i -le [Math]::Min($frames.Count - 1, 5); $i++) {
-                Update-SectionSpinner -Detail "" -Tick $i
-                Start-Sleep -Milliseconds 80
-            }
-        }
     }
 }
 
@@ -192,6 +260,7 @@ function Update-SectionSpinner([string]$Detail, [int]$Tick) {
 }
 
 function Complete-SectionSpinner {
+    Stop-HeaderSpinnerTimer
     if (-not (Test-CanAnimate)) {
         $script:ActiveSectionRow = -1
         $script:ActiveDetailRow = -1
@@ -219,6 +288,23 @@ function Complete-SectionSpinner {
     $script:ActiveDetailRow = -1
     $script:ActiveSectionText = ""
     $script:ActiveSectionColor = $null
+}
+
+function Start-HeaderSpinnerTimer {
+    if (-not (Test-CanAnimate)) { return }
+    if ($script:ActiveSectionRow -lt 0) { return }
+    try {
+        [UshieHeaderSpinnerHost]::Start($script:ActiveSectionRow, $script:ActiveSectionText, (Get-UsableSpinnerFrames), 80)
+        $script:HeaderSpinnerActive = $true
+    } catch {
+        $script:HeaderSpinnerActive = $false
+    }
+}
+
+function Stop-HeaderSpinnerTimer {
+    if (-not $script:HeaderSpinnerActive) { return }
+    try { [UshieHeaderSpinnerHost]::Stop() } catch {}
+    $script:HeaderSpinnerActive = $false
 }
 
 
@@ -257,6 +343,10 @@ function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [strin
         if (Test-CanAnimate) {
             try { $script:ActiveDetailRow = [Console]::CursorTop - 1 } catch { $script:ActiveDetailRow = -1 }
         }
+    }
+    Start-HeaderSpinnerTimer
+    if (Test-CanAnimate) {
+        Start-Sleep -Milliseconds 120
     }
 }
 
