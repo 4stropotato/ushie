@@ -274,7 +274,7 @@ function Update-SectionSpinner([string]$Detail, [int]$Tick) {
 
 function Complete-SectionSpinner {
     Stop-HeaderSpinnerTimer
-    if (-not (Test-CanAnimate)) {
+    if ($VerboseOutput -or -not (Test-CanAnimate)) {
         $script:ActiveSectionRow = -1
         $script:ActiveDetailRow = -1
         $script:ActiveSectionText = ""
@@ -367,7 +367,7 @@ function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [strin
     if (-not $VerboseOutput) {
         Start-HeaderSpinnerTimer
     }
-    if (Test-CanAnimate) {
+    if (Test-CanAnimate -and -not $VerboseOutput) {
         Start-Sleep -Milliseconds 120
     }
 }
@@ -1411,9 +1411,12 @@ if ($script:RunProfile -eq "Extreme") {
 
 Step "Backup registry snapshots"
 Backup-Registry -BackupDir $backupDir
+Write-Detail ("Backup folder ready: " + $backupDir)
+Write-Detail "Exported rollback snapshots for DWM, IPv6/TCPIP, desktop, explorer, keyboard, notifications, and search keys."
 
 Step "Clean old persistent legacy tasks (one-shot mode)"
 Remove-LegacyWinLagTasks
+Write-Detail "Removed old WinLagFix scheduled tasks and legacy helper script if they existed."
 
 Step "Apply lag / debloat registry baseline"
 cmd /c "reg delete \"HKLM\SOFTWARE\Microsoft\Windows\Dwm\" /v OverlayTestMode /f >nul 2>&1" | Out-Null
@@ -1432,6 +1435,7 @@ reg add "HKCU\System\GameConfigStore" /v GameDVR_DXGIHonorFSEWindowsCompatible /
 reg add "HKLM\System\CurrentControlSet\Control\Session Manager\Power" /v HibernateEnabled /t REG_DWORD /d 0 /f | Out-Null
 # Prevent Windows from silently auto-installing Store games / sponsored apps.
 reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent" /v DisableWindowsConsumerFeatures /t REG_DWORD /d 1 /f | Out-Null
+Write-Detail "Applied baseline debloat: activity feed off, Copilot off, background apps off, hibernate off, sponsored Store installs off."
 
 Step "Shell responsiveness baseline (both profiles)"
 # Instant menus + explorer startup - applies to Safe and Extreme.
@@ -1446,35 +1450,49 @@ reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t R
 fsutil behavior set disablelastaccess 1 | Out-Null
 # NTFS: disable legacy 8.3 filename generation (less work on every file create/delete).
 fsutil behavior set disable8dot3 1 | Out-Null
+Write-Detail "Applied shell responsiveness baseline: instant Explorer startup, faster hung-app timeout, faster shutdown kill timeouts, reduced NTFS metadata overhead."
 
 if ($script:RunProfile -eq "Extreme") {
     Step "Apply EXTREME visual + shell performance tweaks"
     Apply-ExtremeProfile
+    Write-Detail "Applied EXTREME visual profile: animations off, transparency off, taskbar effects off, mouse acceleration off, cursor blink off."
     Step "Apply EXTREME system-wide responsiveness tweaks"
     Apply-ExtremeSystemWide
+    Write-Detail "Applied EXTREME system-wide shell trim: desktop preview off and extra shell overhead disabled."
     Step "Apply EXTREME latency stack (CPU/GPU/Network)"
     Apply-ExtremeLatencyStack
+    Write-Detail "Applied EXTREME latency stack: MMCSS game priorities, Win32 scheduler bias, no Nagle delay, lower-latency TCP globals, BCD timer policy."
     Step "Apply EXTREME telemetry and debloat"
     Apply-ExtremeTelemetry
+    Write-Detail "Applied EXTREME telemetry trim: CEIP tasks off, advertising/privacy tracking off, IPv4 preference, Delivery Optimization local-only."
 } else {
     Step "Apply SAFE visual + shell defaults"
     Apply-SafeProfile
+    Write-Detail "Applied SAFE visual profile: Windows animations off, taskbar effects off, transparency off, ClearType retained, default mouse feel preserved."
 }
 
 # ClearType always on regardless of profile.
 reg add "HKCU\Control Panel\Desktop" /v FontSmoothing /t REG_SZ /d 2 /f | Out-Null
 reg add "HKCU\Control Panel\Desktop" /v FontSmoothingType /t REG_DWORD /d 2 /f | Out-Null
 reg add "HKCU\Control Panel\Desktop" /v FontSmoothingGamma /t REG_DWORD /d 1000 /f | Out-Null
+Write-Detail "Locked ClearType on so fonts stay readable after visual effects changes."
 
 Step "Tune memory policy"
 Apply-MemoryPolicy -CurrentProfile $script:RunProfile
+if ($script:RunProfile -eq "Extreme") {
+    Write-Detail "Memory policy set for low-latency gaming: Memory Compression and Page Combining disabled."
+} else {
+    Write-Detail "Memory policy set for daily-use stability: Memory Compression and Page Combining enabled."
+}
 
 Step "Write profile marker"
 Set-ProfileMarker
+Write-Detail ("Profile marker written to " + $script:StateRoot)
 
 Step "GPU / Dota gaming optimization"
 if ($script:RunProfile -eq "Extreme") {
     reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f | Out-Null
+    Write-Detail "Extreme GPU path enabled: HAGS requested (restart-class) plus high-performance game preference markers."
 } else {
     Write-Detail "Safe mode skips HAGS because it is a restart-class change."
 }
@@ -1487,6 +1505,9 @@ reg add "HKCU\System\GameConfigStore" /v GameDVR_HonorUserFSEBehaviorMode /t REG
 $dotaPath = "C:\Program Files (x86)\Steam\steamapps\common\dota 2 beta\game\bin\win64\dota2.exe"
 if (Test-Path $dotaPath) {
     reg add "HKCU\Software\Microsoft\DirectX\UserGpuPreferences" /v "$dotaPath" /t REG_SZ /d "GpuPreference=2;" /f | Out-Null
+    Write-Detail ("Pinned Dota GPU preference to high performance: " + $dotaPath)
+} else {
+    Write-Detail "Dota executable was not found, so per-app GPU preference was skipped."
 }
 
 Step "Restore keyboard responsiveness"
@@ -1498,6 +1519,7 @@ reg add "HKCU\Control Panel\Accessibility\Keyboard Response" /v BounceTime /t RE
 reg add "HKCU\Control Panel\Keyboard" /v KeyboardDelay /t REG_SZ /d 0 /f | Out-Null
 reg add "HKCU\Control Panel\Keyboard" /v KeyboardSpeed /t REG_SZ /d 31 /f | Out-Null
 rundll32.exe user32.dll,UpdatePerUserSystemParameters
+Write-Detail "Restored low-latency keyboard settings: no filter-key delay, fastest repeat rate, zero keyboard delay."
 
 Step "Set DNS + clean temp/cache"
 try {
@@ -1515,6 +1537,7 @@ sc.exe config UsoSvc start= demand | Out-Null
 sc.exe config WaaSMedicSvc start= demand | Out-Null
 sc.exe config TrustedInstaller start= demand | Out-Null
 Start-Service BITS -ErrorAction SilentlyContinue
+Write-Detail "Restored core servicing stack defaults for BITS, Windows Update, Update Orchestrator, Medic Service, and TrustedInstaller."
 
 Step "Set selected debloat service startup defaults"
 sc.exe config RemoteRegistry start= disabled | Out-Null
@@ -1556,6 +1579,11 @@ sc.exe config XblAuthManager start= demand | Out-Null
 sc.exe config XblGameSave start= demand | Out-Null
 sc.exe config XboxNetApiSvc start= demand | Out-Null
 sc.exe config XboxGipSvc start= demand | Out-Null
+if ($script:RunProfile -eq "Extreme") {
+    Write-Detail "Extreme service policy applied: SysMain, telemetry, Delivery Optimization, WER, Maps, WMP sharing, RetailDemo, and Phone services disabled."
+} else {
+    Write-Detail "Safe service policy applied: SysMain/Search restored, optional services left on-demand, and background bloat kept restrained."
+}
 
 Step "Restore remote access stack (Tailscale/RDP/SSH)"
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f | Out-Null
@@ -1574,21 +1602,25 @@ if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
     sc.exe config sshd start= auto | Out-Null
     Start-Service sshd -ErrorAction SilentlyContinue
 }
+Write-Detail "Restored remote access stack: RDP allowed, firewall rule enabled, network-awareness services running, and Tailscale/sshd auto-start if installed."
 
 if ($script:RunProfile -eq "Extreme") {
     Step "Enable HPET"
     pnputil /enable-device "ACPI\PNP0103\0" | Out-Null
+    Write-Detail "Requested HPET device enable for the Extreme profile."
 
     Step "Disable hypervisor/VBS for low-latency"
     Invoke-BcdSet "hypervisorlaunchtype" "off"
     reg add "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard" /v EnableVirtualizationBasedSecurity /t REG_DWORD /d 0 /f | Out-Null
     reg add "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity" /v Enabled /t REG_DWORD /d 0 /f | Out-Null
     reg add "HKLM\SYSTEM\CurrentControlSet\Control\Lsa" /v LsaCfgFlags /t REG_DWORD /d 0 /f | Out-Null
+    Write-Detail "Requested Extreme boot-level latency changes: hypervisor off, VBS off, HVCI off, LSA protection off."
 
     if (-not $KeepWSL) {
         Step "Disable WSL / VirtualMachinePlatform"
         dism /online /disable-feature /featurename:VirtualMachinePlatform /norestart | Out-Null
         dism /online /disable-feature /featurename:Microsoft-Windows-Subsystem-Linux /norestart | Out-Null
+        Write-Detail "Requested WSL and VirtualMachinePlatform disable for the Extreme profile."
     }
 } else {
     Write-Detail "Safe mode skips HPET, HAGS, hypervisor/VBS, and WSL changes so it stays no-restart."
@@ -1598,6 +1630,9 @@ Step "Set max performance power policy (one-time)"
 $planGuid = Set-MaxPerformancePlan
 if ($script:RunProfile -eq "Extreme") {
     Apply-ExtremeCpuPowerPolicy -PlanGuid $planGuid
+    Write-Detail "Applied Extreme CPU power policy on top of Ultimate Performance: idle disable, aggressive boost, and zero EPP."
+} else {
+    Write-Detail "Activated Ultimate Performance and locked processor min/max to 100%."
 }
 $activeSchemeLine = (powercfg /GETACTIVESCHEME | Out-String).Trim()
 Write-Host $activeSchemeLine
