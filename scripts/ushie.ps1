@@ -241,13 +241,6 @@ function Start-SectionSpinner([string]$Text, [string]$Color, [switch]$UseDetailL
         } catch {
             $script:ActiveSectionRow = -1
         }
-        if ($VerboseOutput -and $script:ActiveSectionRow -ge 0) {
-            $frames = Get-UsableSpinnerFrames
-            for ($i = 1; $i -le [Math]::Min($frames.Count - 1, 3); $i++) {
-                Update-SectionSpinner -Detail "" -Tick $i
-                Start-Sleep -Milliseconds 80
-            }
-        }
     }
 }
 
@@ -364,9 +357,7 @@ function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [strin
             try { $script:ActiveDetailRow = [Console]::CursorTop - 1 } catch { $script:ActiveDetailRow = -1 }
         }
     }
-    if (-not $VerboseOutput) {
-        Start-HeaderSpinnerTimer
-    }
+    Start-HeaderSpinnerTimer
     if (Test-CanAnimate -and -not $VerboseOutput) {
         Start-Sleep -Milliseconds 120
     }
@@ -794,32 +785,87 @@ function Test-IPv4String([string]$Value) {
     return ($Value -match '^(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1?[0-9]?[0-9])){3}$')
 }
 
-function Measure-DnsQueryLatencyMs([string]$Name, [string]$Server, [string]$Detail, [object]$TickRef = $null) {
-    $scriptText = @"
-try {
-    Resolve-DnsName -Name '$Name' -Server '$Server' -Type A -DnsOnly -ErrorAction Stop | Out-Null
-    exit 0
-} catch {
-    exit 1
+function New-DnsQueryPacket([string]$Name) {
+    $id = Get-Random -Minimum 0 -Maximum 65535
+    $bytes = New-Object 'System.Collections.Generic.List[byte]'
+
+    $bytes.Add([byte](($id -shr 8) -band 0xFF))
+    $bytes.Add([byte]($id -band 0xFF))
+    $bytes.Add(0x01)
+    $bytes.Add(0x00)
+    $bytes.Add(0x00)
+    $bytes.Add(0x01)
+    $bytes.Add(0x00)
+    $bytes.Add(0x00)
+    $bytes.Add(0x00)
+    $bytes.Add(0x00)
+    $bytes.Add(0x00)
+    $bytes.Add(0x00)
+
+    foreach ($label in ($Name -split '\.')) {
+        $labelBytes = [System.Text.Encoding]::ASCII.GetBytes($label)
+        $bytes.Add([byte]$labelBytes.Length)
+        foreach ($b in $labelBytes) {
+            $bytes.Add($b)
+        }
+    }
+
+    $bytes.Add(0x00)
+    $bytes.Add(0x00)
+    $bytes.Add(0x01)
+    $bytes.Add(0x00)
+    $bytes.Add(0x01)
+
+    return @{
+        Id     = $id
+        Packet = $bytes.ToArray()
+    }
 }
-"@
-    $proc = Start-Process -FilePath "powershell.exe" -ArgumentList @("-NoProfile","-ExecutionPolicy","Bypass","-Command",$scriptText) -WindowStyle Hidden -PassThru
+
+function Measure-DnsQueryLatencyMs([string]$Name, [string]$Server, [string]$Detail, [object]$TickRef = $null) {
+    $query = New-DnsQueryPacket -Name $Name
+    $udp = $null
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
 
-    while (-not $proc.HasExited) {
-        if ($null -ne $TickRef) {
-            Update-SectionSpinner -Detail $Detail -Tick $TickRef.Value
-            $TickRef.Value++
-        }
-        Start-Sleep -Milliseconds 80
-        try { $proc.Refresh() } catch {}
-    }
+    try {
+        $udp = New-Object System.Net.Sockets.UdpClient
+        $udp.Client.SendTimeout = 2500
+        $udp.Client.ReceiveTimeout = 2500
+        $udp.Connect($Server, 53)
+        [void]$udp.Send($query.Packet, $query.Packet.Length)
 
-    $sw.Stop()
-    if ($proc.ExitCode -eq 0) {
+        $async = $udp.BeginReceive($null, $null)
+        while (-not $async.AsyncWaitHandle.WaitOne(80)) {
+            if ($null -ne $TickRef) {
+                Update-SectionSpinner -Detail $Detail -Tick $TickRef.Value
+                $TickRef.Value++
+            }
+            if ($sw.ElapsedMilliseconds -ge 2500) {
+                throw "DNS query timeout"
+            }
+        }
+
+        $remote = New-Object System.Net.IPEndPoint([System.Net.IPAddress]::Any, 0)
+        $response = $udp.EndReceive($async, [ref]$remote)
+        $sw.Stop()
+
+        if ($response.Length -lt 12) { return 2500.0 }
+        if ($response[0] -ne [byte](($query.Id -shr 8) -band 0xFF)) { return 2500.0 }
+        if ($response[1] -ne [byte]($query.Id -band 0xFF)) { return 2500.0 }
+
+        $rcode = ($response[3] -band 0x0F)
+        if ($rcode -ne 0) { return 2500.0 }
+
         return [math]::Round($sw.Elapsed.TotalMilliseconds, 2)
+    } catch {
+        return 2500.0
+    } finally {
+        if ($sw.IsRunning) { $sw.Stop() }
+        if ($null -ne $udp) {
+            try { $udp.Close() } catch {}
+            try { $udp.Dispose() } catch {}
+        }
     }
-    return 2500.0
 }
 
 function Measure-DnsServerLatencyMs([string]$Server, [string]$DetailPrefix = "", [object]$TickRef = $null) {
@@ -926,12 +972,26 @@ function Resolve-DnsSelection {
         if ($rows.Count -eq 0) {
             throw "DNS auto benchmark failed to score candidates. Check network connectivity or use -DnsServers."
         }
-        $best = $rows | Sort-Object ScoreMs | Select-Object -First 1
+        $validRows = @($rows | Where-Object { $_.ScoreMs -lt 2500 })
+        if ($validRows.Count -eq 0) {
+            if ($candidateMap.ContainsKey("CurrentAdapterDNS")) {
+                Write-Host (Paint "[WARN] DNS auto benchmark was inconclusive; keeping current adapter DNS." $S.Yellow)
+                if ($VerboseOutput) {
+                    Write-Host ""
+                    Write-Host (Paint "[DNS BENCHMARK]" $S.NeonBlue)
+                    ($rows | Sort-Object ScoreMs,Provider | Format-Table -AutoSize | Out-String) | Write-Host
+                }
+                return @{ Label = "CurrentAdapterDNS"; Servers = $candidateMap["CurrentAdapterDNS"] }
+            }
+            throw "DNS auto benchmark could not reach any candidate. Use -DnsServers or check outbound DNS/UDP filtering."
+        }
+
+        $best = $validRows | Sort-Object ScoreMs,Provider | Select-Object -First 1
         Write-Detail ("DNS Auto benchmark winner: " + $best.Provider + " (" + $best.ScoreMs + "ms)")
         if ($VerboseOutput) {
             Write-Host ""
             Write-Host (Paint "[DNS BENCHMARK]" $S.NeonBlue)
-            ($rows | Sort-Object ScoreMs | Format-Table -AutoSize | Out-String) | Write-Host
+            ($rows | Sort-Object ScoreMs,Provider | Format-Table -AutoSize | Out-String) | Write-Host
         }
         return @{ Label = $best.Provider; Servers = $candidateMap[$best.Provider] }
     }
