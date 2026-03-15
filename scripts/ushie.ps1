@@ -241,13 +241,6 @@ function Start-SectionSpinner([string]$Text, [string]$Color, [switch]$UseDetailL
         } catch {
             $script:ActiveSectionRow = -1
         }
-        if ($VerboseOutput -and $script:ActiveSectionRow -ge 0) {
-            $frames = Get-UsableSpinnerFrames
-            for ($i = 1; $i -le [Math]::Min($frames.Count - 1, 3); $i++) {
-                Update-SectionSpinner -Detail "" -Tick $i
-                Start-Sleep -Milliseconds 80
-            }
-        }
     }
 }
 
@@ -327,6 +320,25 @@ function Stop-HeaderSpinnerTimer {
     $script:HeaderSpinnerActive = $false
 }
 
+function Write-Host {
+    [CmdletBinding()]
+    param(
+        [Parameter(Position=0, ValueFromPipeline=$true, ValueFromRemainingArguments=$true)]
+        [object[]]$Object,
+        [object]$Separator,
+        [switch]$NoNewline,
+        [ConsoleColor]$ForegroundColor,
+        [ConsoleColor]$BackgroundColor
+    )
+
+    process {
+        if ($script:HeaderSpinnerActive) {
+            Stop-HeaderSpinnerTimer
+        }
+        Microsoft.PowerShell.Utility\Write-Host @PSBoundParameters
+    }
+}
+
 
 
 function Invoke-ProcessWithSpinner([string]$FilePath, [string[]]$ArgumentList, [string]$Label, [string]$AccentColor) {
@@ -364,9 +376,7 @@ function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [strin
             try { $script:ActiveDetailRow = [Console]::CursorTop - 1 } catch { $script:ActiveDetailRow = -1 }
         }
     }
-    if (-not $VerboseOutput) {
-        Start-HeaderSpinnerTimer
-    }
+    Start-HeaderSpinnerTimer
     if (Test-CanAnimate -and -not $VerboseOutput) {
         Start-Sleep -Milliseconds 120
     }
