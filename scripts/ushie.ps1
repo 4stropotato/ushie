@@ -241,6 +241,13 @@ function Start-SectionSpinner([string]$Text, [string]$Color, [switch]$UseDetailL
         } catch {
             $script:ActiveSectionRow = -1
         }
+        if ($VerboseOutput -and $script:ActiveSectionRow -ge 0) {
+            $frames = Get-UsableSpinnerFrames
+            for ($i = 1; $i -le [Math]::Min($frames.Count - 1, 3); $i++) {
+                Update-SectionSpinner -Detail "" -Tick $i
+                Start-Sleep -Milliseconds 80
+            }
+        }
     }
 }
 
@@ -357,7 +364,9 @@ function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [strin
             try { $script:ActiveDetailRow = [Console]::CursorTop - 1 } catch { $script:ActiveDetailRow = -1 }
         }
     }
-    Start-HeaderSpinnerTimer
+    if (-not $VerboseOutput) {
+        Start-HeaderSpinnerTimer
+    }
     if (Test-CanAnimate) {
         Start-Sleep -Milliseconds 120
     }
