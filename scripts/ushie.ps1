@@ -307,7 +307,7 @@ function Start-HeaderSpinnerTimer {
     try {
         $initialDelay = 0
         if ($VerboseOutput) {
-            $initialDelay = if ($script:ActiveDetailRow -ge 0) { 180 } else { 650 }
+            $initialDelay = if ($script:ActiveDetailRow -ge 0) { 420 } else { 900 }
         }
         [UshieHeaderSpinnerHost]::Start(
             $script:ActiveSectionRow,
@@ -346,6 +346,31 @@ function Write-Host {
             Stop-HeaderSpinnerTimer
         }
         Microsoft.PowerShell.Utility\Write-Host @PSBoundParameters
+    }
+}
+
+function Out-Default {
+    [CmdletBinding()]
+    param(
+        [Parameter(ValueFromPipeline = $true)]
+        [psobject]$InputObject
+    )
+
+    begin {
+        if ($script:HeaderSpinnerActive) {
+            Stop-HeaderSpinnerTimer
+        }
+        $buffer = New-Object System.Collections.Generic.List[object]
+    }
+
+    process {
+        $null = $buffer.Add($InputObject)
+    }
+
+    end {
+        if ($buffer.Count -gt 0) {
+            $buffer.ToArray() | Microsoft.PowerShell.Core\Out-Default
+        }
     }
 }
 
