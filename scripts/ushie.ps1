@@ -88,6 +88,17 @@ function Test-CanAnimate {
     }
 }
 
+function Get-SpinnerFrames {
+    try {
+        $encodingName = [Console]::OutputEncoding.WebName
+        if ($encodingName -match "utf") {
+            return @("⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏")
+        }
+    } catch {}
+
+    return @("|","/","-","\")
+}
+
 function Clear-LiveLine {
     if (-not (Test-CanAnimate)) { return }
     $width = Get-ConsoleWidth
@@ -99,13 +110,13 @@ function Show-LoadingPulse([string]$Kind, [string]$Message, [string]$AccentColor
 
     $width = Get-ConsoleWidth
     $label = if ($Kind -eq "CHECK") { "checking" } else { "loading" }
-    $frames = @("(|)", "(/)", "(-)", "(\)", "(|)", "(/)")
+    $frames = Get-SpinnerFrames
 
     foreach ($frame in $frames) {
-        $prefix = Paint ("   {0} - " -f $frame) $AccentColor
+        $prefix = Paint ("   {0}  " -f $frame) $AccentColor
         $line = ($prefix + $label + " " + $Message).PadRight($width)
         Write-Host -NoNewline ("`r" + $line)
-        Start-Sleep -Milliseconds 95
+        Start-Sleep -Milliseconds 80
     }
 
     Clear-LiveLine
@@ -117,14 +128,14 @@ function Invoke-ProcessWithSpinner([string]$FilePath, [string[]]$ArgumentList, [
         return $proc.ExitCode
     }
 
-    $frames = @("(|)", "(/)", "(-)", "(\)")
+    $frames = Get-SpinnerFrames
     $width = Get-ConsoleWidth
     $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -WindowStyle Hidden -PassThru
     $i = 0
 
     while (-not $proc.HasExited) {
         $spinner = $frames[$i % $frames.Count]
-        $prefix = Paint ("   {0} - " -f $spinner) $AccentColor
+        $prefix = Paint ("   {0}  " -f $spinner) $AccentColor
         $line = ($prefix + $Label).PadRight($width)
         Write-Host -NoNewline ("`r" + $line)
         Start-Sleep -Milliseconds 120
@@ -640,8 +651,9 @@ function Resolve-DnsSelection {
             $providerIndex++
             if (Test-CanAnimate) {
                 $width = Get-ConsoleWidth
-                $frame = @("(|)", "(/)", "(-)", "(\)")[$providerIndex % 4]
-                $prefix = Paint ("   {0} - " -f $frame) $S.NeonMint
+                $spinnerFrames = Get-SpinnerFrames
+                $frame = $spinnerFrames[$providerIndex % $spinnerFrames.Count]
+                $prefix = Paint ("   {0}  " -f $frame) $S.NeonMint
                 $line = ($prefix + ("dns benchmark [{0}/{1}] {2}" -f $providerIndex, $orderedKeys.Count, $k)).PadRight($width)
                 Write-Host -NoNewline ("`r" + $line)
             } elseif (-not $VerboseOutput) {
