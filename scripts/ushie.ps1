@@ -102,6 +102,28 @@ function Get-SpinnerFrames {
     return @("|","/","-","\")
 }
 
+function Get-UsableSpinnerFrames {
+    try {
+        $encodingName = [Console]::OutputEncoding.WebName
+        if ($encodingName -match "utf") {
+            return @(
+                [string][char]0x280B,
+                [string][char]0x2819,
+                [string][char]0x2839,
+                [string][char]0x2838,
+                [string][char]0x283C,
+                [string][char]0x2834,
+                [string][char]0x2826,
+                [string][char]0x2827,
+                [string][char]0x2807,
+                [string][char]0x280F
+            )
+        }
+    } catch {}
+
+    return @("|","/","-","\")
+}
+
 function Clear-LiveLine {
     if (-not (Test-CanAnimate)) { return }
     $width = Get-ConsoleWidth
@@ -122,7 +144,7 @@ function Start-SectionSpinner([string]$Text, [string]$Color) {
     $script:ActiveSectionColor = $Color
     $script:ActiveSectionRow = -1
 
-    $frames = Get-SpinnerFrames
+    $frames = Get-UsableSpinnerFrames
     $initialLine = Format-SectionSpinnerLine -Frame $frames[0] -Text $Text -Color $Color
     Write-Host $initialLine
 
@@ -139,7 +161,7 @@ function Update-SectionSpinner([string]$Detail, [int]$Tick) {
     if (-not (Test-CanAnimate)) { return }
     if ($script:ActiveSectionRow -lt 0) { return }
 
-    $frames = Get-SpinnerFrames
+    $frames = Get-UsableSpinnerFrames
     $frame = $frames[$Tick % $frames.Count]
     $currentTop = [Console]::CursorTop
     $currentLeft = [Console]::CursorLeft
@@ -163,7 +185,7 @@ function Invoke-ProcessWithSpinner([string]$FilePath, [string[]]$ArgumentList, [
         return $proc.ExitCode
     }
 
-    $frames = Get-SpinnerFrames
+    $frames = Get-UsableSpinnerFrames
     $width = Get-ConsoleWidth
     $proc = Start-Process -FilePath $FilePath -ArgumentList $ArgumentList -WindowStyle Hidden -PassThru
     $i = 0
@@ -179,10 +201,11 @@ function Invoke-ProcessWithSpinner([string]$FilePath, [string[]]$ArgumentList, [
 
 function Show-SectionHeader([string]$Kind, [string]$Id, [string]$Message, [string]$AccentColor) {
     $width = Get-ConsoleWidth
-    $ruleWidth = [Math]::Min($width, [Math]::Max(($Message.Length + 8), 54))
+    $sectionText = ("[{0} {1}] {2}" -f $Kind, $Id, $Message)
+    $ruleWidth = [Math]::Min($width, [Math]::Max(($sectionText.Length + 8), 54))
     $rule = ("-" * $ruleWidth)
 
-    Start-SectionSpinner -Text $Message -Color $AccentColor
+    Start-SectionSpinner -Text $sectionText -Color $AccentColor
     Write-Host (Paint $rule $S.Slate)
 }
 
