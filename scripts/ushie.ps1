@@ -110,7 +110,7 @@ public static class UshieHeaderSpinnerHost
         }
     }
 
-    public static void Start(int row, string text, string color, string reset, string[] frames, int intervalMs)
+    public static void Start(int row, string text, string color, string reset, string[] frames, int intervalMs, int initialDelayMs)
     {
         lock (Sync) {
             Stop();
@@ -120,7 +120,7 @@ public static class UshieHeaderSpinnerHost
             Reset = reset ?? "";
             Frames = (frames != null && frames.Length > 0) ? frames : new[] { "|", "/", "-", "\\" };
             Index = 0;
-            Timer = new Timer(Tick, null, 0, intervalMs);
+            Timer = new Timer(Tick, null, initialDelayMs, intervalMs);
         }
     }
 
@@ -254,8 +254,13 @@ function Update-SectionSpinner([string]$Detail, [int]$Tick) {
     $currentLeft = [Console]::CursorLeft
 
     try {
-        [Console]::SetCursorPosition(0, $script:ActiveSectionRow)
-        Write-Host -NoNewline (Format-SectionSpinnerLine -Frame $frame -Text $script:ActiveSectionText -Color $script:ActiveSectionColor -Detail $Detail)
+        if ($VerboseOutput -and $script:ActiveDetailRow -ge 0 -and $script:HeaderSpinnerActive) {
+            Stop-HeaderSpinnerTimer
+        }
+        if (-not $VerboseOutput) {
+            [Console]::SetCursorPosition(0, $script:ActiveSectionRow)
+            Write-Host -NoNewline (Format-SectionSpinnerLine -Frame $frame -Text $script:ActiveSectionText -Color $script:ActiveSectionColor -Detail $Detail)
+        }
         if ($script:ActiveDetailRow -ge 0) {
             [Console]::SetCursorPosition(0, $script:ActiveDetailRow)
             [Console]::Write((Format-SectionDetailLine -Detail $Detail))
@@ -300,13 +305,18 @@ function Start-HeaderSpinnerTimer {
     if (-not (Test-CanAnimate)) { return }
     if ($script:ActiveSectionRow -lt 0) { return }
     try {
+        $initialDelay = 0
+        if ($VerboseOutput) {
+            $initialDelay = if ($script:ActiveDetailRow -ge 0) { 180 } else { 650 }
+        }
         [UshieHeaderSpinnerHost]::Start(
             $script:ActiveSectionRow,
             $script:ActiveSectionText,
             $script:ActiveSectionColor,
             $S.Reset,
             (Get-UsableSpinnerFrames),
-            80
+            80,
+            $initialDelay
         )
         $script:HeaderSpinnerActive = $true
     } catch {
