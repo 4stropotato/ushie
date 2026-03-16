@@ -9,6 +9,8 @@ param(
     [switch]$KeepWSL,
     [switch]$SkipVerify,
     [switch]$VerifyOnly,
+    [Alias("rf")]
+    [switch]$RemoteFix,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -538,7 +540,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -551,12 +553,14 @@ function Show-Banner {
 function Show-Manual {
     Write-Host (Paint "Usage:" $S.NeonBlue)
     Write-Host "  .\scripts\ushie.ps1 [-m Safe|Extreme] [-v] [-Dns Auto|Cloudflare|Google|Quad9|OpenDNS|AdGuard|ControlD|DNSSB|Comodo] [-DnsServers ip,ip,...]"
+    Write-Host "  .\scripts\ushie.ps1 -RemoteFix [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
     Write-Host (Paint "Main switches:" $S.NeonBlue)
     Write-Host "  -m              Profile mode (Safe = live/no-restart, Extreme = deeper tuning + reboot)"
     Write-Host "  -v              Verbose/full view output"
+    Write-Host "  -RemoteFix      Repair RDP/Tailscale/SSH access only (no optimizer pass)"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -569,8 +573,70 @@ function Show-Manual {
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -m Safe"""
     Write-Host (Paint "One-liner (Extreme):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -m Extreme -v"""
+    Write-Host (Paint "One-liner (RemoteFix):" $S.NeonBlue)
+    Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RemoteFix -v"""
     Write-Host (Paint "One-liner (Help):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -h"""
+}
+
+function Repair-RemoteAccessStack {
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f | Out-Null
+    netsh advfirewall firewall set rule group="Remote Desktop" new enable=Yes | Out-Null
+
+    sc.exe config TermService start= auto | Out-Null
+    sc.exe config NlaSvc start= auto | Out-Null
+    sc.exe config netprofm start= auto | Out-Null
+    sc.exe config SessionEnv start= demand | Out-Null
+    sc.exe config UmRdpService start= demand | Out-Null
+
+    Start-Service NlaSvc -ErrorAction SilentlyContinue
+    Start-Service netprofm -ErrorAction SilentlyContinue
+    Start-Service SessionEnv -ErrorAction SilentlyContinue
+    Start-Service TermService -ErrorAction SilentlyContinue
+    Start-Service UmRdpService -ErrorAction SilentlyContinue
+
+    if (Get-Service -Name Tailscale -ErrorAction SilentlyContinue) {
+        sc.exe config Tailscale start= auto | Out-Null
+        Start-Service Tailscale -ErrorAction SilentlyContinue
+    }
+    if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
+        sc.exe config sshd start= auto | Out-Null
+        Start-Service sshd -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-RemoteAccessSnapshot {
+    $listener = Get-NetTCPConnection -State Listen -LocalPort 3389 -ErrorAction SilentlyContinue | Select-Object -First 1
+    $tailIp = ""
+    if (Get-Command tailscale -ErrorAction SilentlyContinue) {
+        $tailIp = ((tailscale ip -4 2>$null) | Select-Object -First 1)
+    }
+    return [PSCustomObject]@{
+        TermService = (Get-Service -Name TermService -ErrorAction SilentlyContinue)
+        SessionEnv  = (Get-Service -Name SessionEnv -ErrorAction SilentlyContinue)
+        UmRdpService = (Get-Service -Name UmRdpService -ErrorAction SilentlyContinue)
+        Tailscale   = (Get-Service -Name Tailscale -ErrorAction SilentlyContinue)
+        Sshd        = (Get-Service -Name sshd -ErrorAction SilentlyContinue)
+        Port3389    = [bool]($null -ne $listener)
+        TailscaleIp = $tailIp
+    }
+}
+
+function Show-RemoteAccessSnapshot([object]$Snapshot) {
+    Print-Result "RdpRegistry" ((Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" -Name fDenyTSConnections -ErrorAction SilentlyContinue).fDenyTSConnections) "OK"
+    Print-Result "TermService" $(if ($null -ne $Snapshot.TermService) { $Snapshot.TermService.Status } else { "Missing" }) $(if ($null -ne $Snapshot.TermService -and $Snapshot.TermService.Status -eq "Running") { "OK" } else { "WARN" })
+    Print-Result "SessionEnv" $(if ($null -ne $Snapshot.SessionEnv) { $Snapshot.SessionEnv.Status } else { "Missing" }) $(if ($null -ne $Snapshot.SessionEnv) { "OK" } else { "WARN" })
+    Print-Result "UmRdpService" $(if ($null -ne $Snapshot.UmRdpService) { $Snapshot.UmRdpService.Status } else { "Missing" }) $(if ($null -ne $Snapshot.UmRdpService) { "OK" } else { "WARN" })
+    Print-Result "RdpPort3389" $(if ($Snapshot.Port3389) { "Listening" } else { "Not listening" }) $(if ($Snapshot.Port3389) { "OK" } else { "WARN" })
+    if ($null -ne $Snapshot.Tailscale) {
+        Print-Result "TailscaleService" $Snapshot.Tailscale.Status $(if ($Snapshot.Tailscale.Status -eq "Running") { "OK" } else { "WARN" })
+        if (-not [string]::IsNullOrWhiteSpace($Snapshot.TailscaleIp)) {
+            Print-Result "TailscaleIPv4" $Snapshot.TailscaleIp "OK"
+        }
+    }
+    if ($null -ne $Snapshot.Sshd) {
+        Print-Result "sshd" $Snapshot.Sshd.Status $(if ($Snapshot.Sshd.Status -eq "Running") { "OK" } else { "WARN" })
+    }
 }
 
 function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
@@ -1591,7 +1657,33 @@ $dnsServersText = ""
 if ($DnsServers -and $DnsServers.Count -gt 0) {
     $dnsServersText = (($DnsServers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }) -join ",")
 }
-Write-Detail ("Selected mode: " + $script:RunProfile + ", Dns=" + $Dns + ", DnsServers=" + $dnsServersText + ", KeepWSL=" + $KeepWSL + ", SkipVerify=" + $SkipVerify + ", VerifyOnly=" + $VerifyOnly + ", NoRestore=" + $NoRestore)
+Write-Detail ("Selected mode: " + $script:RunProfile + ", Dns=" + $Dns + ", DnsServers=" + $dnsServersText + ", KeepWSL=" + $KeepWSL + ", SkipVerify=" + $SkipVerify + ", VerifyOnly=" + $VerifyOnly + ", NoRestore=" + $NoRestore + ", RemoteFix=" + $RemoteFix)
+
+if ($RemoteFix) {
+    Step "Repair remote access stack (RDP/Tailscale/SSH)"
+    Repair-RemoteAccessStack
+    Write-Detail "Re-enabled RDP, firewall, core remote-access services, and Tailscale/sshd auto-start if installed."
+
+    Step "Verify remote access"
+    $remoteSnapshot = Get-RemoteAccessSnapshot
+    Show-RemoteAccessSnapshot -Snapshot $remoteSnapshot
+
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) {
+        Clear-Host
+        Show-Banner
+    }
+    Write-Host ""
+    if ($remoteSnapshot.Port3389) {
+        Write-Host (Paint "   Remote access repaired. RDP should work now." $S.Green)
+    } else {
+        Write-Host (Paint "   Remote access repair applied, but RDP is still not listening." $S.Yellow)
+    }
+    if (-not [string]::IsNullOrWhiteSpace($remoteSnapshot.TailscaleIp)) {
+        Write-Host ((Paint "   Tailscale IP: " $S.Cyan) + $remoteSnapshot.TailscaleIp)
+    }
+    exit 0
+}
 
 if ($VerifyOnly) {
     Step "Verify only"
@@ -1789,22 +1881,7 @@ if ($script:RunProfile -eq "Extreme") {
 }
 
 Step "Restore remote access stack (Tailscale/RDP/SSH)"
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\Terminal Server" /v fDenyTSConnections /t REG_DWORD /d 0 /f | Out-Null
-netsh advfirewall firewall set rule group="Remote Desktop" new enable=Yes | Out-Null
-sc.exe config TermService start= auto | Out-Null
-sc.exe config NlaSvc start= auto | Out-Null
-sc.exe config netprofm start= auto | Out-Null
-Start-Service NlaSvc -ErrorAction SilentlyContinue
-Start-Service netprofm -ErrorAction SilentlyContinue
-Start-Service TermService -ErrorAction SilentlyContinue
-if (Get-Service -Name Tailscale -ErrorAction SilentlyContinue) {
-    sc.exe config Tailscale start= auto | Out-Null
-    Start-Service Tailscale -ErrorAction SilentlyContinue
-}
-if (Get-Service -Name sshd -ErrorAction SilentlyContinue) {
-    sc.exe config sshd start= auto | Out-Null
-    Start-Service sshd -ErrorAction SilentlyContinue
-}
+Repair-RemoteAccessStack
 Write-Detail "Restored remote access stack: RDP allowed, firewall rule enabled, network-awareness services running, and Tailscale/sshd auto-start if installed."
 
 if ($script:RunProfile -eq "Extreme") {
