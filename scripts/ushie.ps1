@@ -15,7 +15,7 @@ param(
     [switch]$FixRazer,
     [Alias("gaming","rzg")]
     [switch]$RazerGaming,
-    [Alias("rzon","razeron")]
+    [Alias("rzon")]
     [switch]$RazerOn,
     [Alias("nr")]
     [switch]$NoRestore,
