@@ -11,6 +11,12 @@ param(
     [switch]$VerifyOnly,
     [Alias("rf")]
     [switch]$RemoteFix,
+    [Alias("rz","razer")]
+    [switch]$FixRazer,
+    [Alias("gaming","rzg")]
+    [switch]$RazerGaming,
+    [Alias("rzon","razeron")]
+    [switch]$RazerOn,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -540,7 +546,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -554,6 +560,9 @@ function Show-Manual {
     Write-Host (Paint "Usage:" $S.NeonBlue)
     Write-Host "  .\scripts\ushie.ps1 [-m Safe|Extreme] [-v] [-Dns Auto|Cloudflare|Google|Quad9|OpenDNS|AdGuard|ControlD|DNSSB|Comodo] [-DnsServers ip,ip,...]"
     Write-Host "  .\scripts\ushie.ps1 -RemoteFix [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -FixRazer [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -RazerGaming [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -RazerOn [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -561,6 +570,9 @@ function Show-Manual {
     Write-Host "  -m              Profile mode (Safe = live/no-restart, Extreme = deeper tuning + reboot)"
     Write-Host "  -v              Verbose/full view output"
     Write-Host "  -RemoteFix      Repair RDP/Tailscale/SSH access only (no optimizer pass)"
+    Write-Host "  -FixRazer       Fix runaway Razer Synapse (clears duplicate RazerAppEngine, relaunches clean; keeps macros)"
+    Write-Host "  -RazerGaming    Min-resource mode: lighting off + Chroma services disabled (no CPU/RAM/disk use); keeps macros"
+    Write-Host "  -RazerOn        Restore Razer fully: re-enable lighting + macros (undo -RazerGaming)"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -575,6 +587,12 @@ function Show-Manual {
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -m Extreme -v"""
     Write-Host (Paint "One-liner (RemoteFix):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RemoteFix -v"""
+    Write-Host (Paint "One-liner (FixRazer):" $S.NeonBlue)
+    Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -FixRazer -v"""
+    Write-Host (Paint "One-liner (RazerGaming):" $S.NeonBlue)
+    Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RazerGaming -v"""
+    Write-Host (Paint "One-liner (RazerOn):" $S.NeonBlue)
+    Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RazerOn -v"""
     Write-Host (Paint "One-liner (Help):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -h"""
 }
@@ -637,6 +655,198 @@ function Show-RemoteAccessSnapshot([object]$Snapshot) {
     if ($null -ne $Snapshot.Sshd) {
         Print-Result "sshd" $Snapshot.Sshd.Status $(if ($Snapshot.Sshd.Status -eq "Running") { "OK" } else { "WARN" })
     }
+}
+
+function Get-RazerLaunchCommand {
+    # Read the official Synapse autostart command from the Run keys so we relaunch exactly how Windows does at login.
+    $runKeys = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
+    )
+    foreach ($key in $runKeys) {
+        if (Test-Path $key) {
+            $props = Get-ItemProperty -Path $key -ErrorAction SilentlyContinue
+            if ($null -ne $props) {
+                foreach ($prop in $props.PSObject.Properties) {
+                    if (($prop.Value -is [string]) -and ($prop.Value -match 'RazerAppEngine\.exe')) {
+                        return [string]$prop.Value
+                    }
+                }
+            }
+        }
+    }
+    # Fallback: default stub launcher with standard Synapse + Chroma params.
+    $stub = "C:\Program Files\Razer\RazerAppEngine\RazerAppEngine.exe"
+    if (Test-Path $stub) {
+        return ('"' + $stub + '" --url-params=apps=synapse,chroma-app --launch-force-hidden=synapse,chroma-app --autoStart=1')
+    }
+    return ""
+}
+
+function Get-RazerSnapshot {
+    $engine = @(Get-Process -Name RazerAppEngine -ErrorAction SilentlyContinue)
+    $memMB = 0
+    if ($engine.Count -gt 0) {
+        $memBytes = ($engine | Measure-Object -Property WorkingSet64 -Sum).Sum
+        $memMB = [math]::Round($memBytes / 1MB, 0)
+    }
+    $gms = Get-Service -Name 'Razer Game Manager Service 3' -ErrorAction SilentlyContinue
+    $elev = Get-Service -Name 'Razer Elevation Service' -ErrorAction SilentlyContinue
+    return [PSCustomObject]@{
+        EngineCount = $engine.Count
+        EngineMemMB = $memMB
+        GameManager = $gms
+        Elevation   = $elev
+    }
+}
+
+function Show-RazerSnapshot([object]$Snapshot) {
+    $countLevel = if ($Snapshot.EngineCount -le 4) { "OK" } else { "WARN" }
+    Print-Result "RazerAppEngineProcesses" $Snapshot.EngineCount $countLevel
+    Print-Result "RazerAppEngineMemoryMB" $Snapshot.EngineMemMB $countLevel
+    Print-Result "GameManagerService" $(if ($null -ne $Snapshot.GameManager) { $Snapshot.GameManager.Status } else { "Missing" }) $(if ($null -ne $Snapshot.GameManager -and $Snapshot.GameManager.Status -eq "Running") { "OK" } else { "WARN" })
+    Print-Result "ElevationService" $(if ($null -ne $Snapshot.Elevation) { $Snapshot.Elevation.Status } else { "Missing" }) "OK"
+}
+
+function Repair-RazerSynapse {
+    # Capture the official launch command BEFORE killing anything, so we can relaunch a clean instance.
+    $launchCmd = Get-RazerLaunchCommand
+
+    # Kill only the front-end module-host processes that pile up (the runaway duplicates).
+    # Game Manager Service + Elevation Service are intentionally left running: those drive macros.
+    $frontEnd = @('RazerAppEngine', 'RzEngineMon', 'razerwdl')
+    Get-Process -Name $frontEnd -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 1500
+
+    # Relaunch a single clean Synapse instance (restores macros + lighting UI).
+    $relaunched = $false
+    if (-not [string]::IsNullOrWhiteSpace($launchCmd)) {
+        $exePath = ""
+        $argLine = ""
+        if ($launchCmd -match '^\s*"([^"]+)"\s*(.*)$') {
+            $exePath = $matches[1]; $argLine = $matches[2]
+        } elseif ($launchCmd -match '^\s*(\S+)\s*(.*)$') {
+            $exePath = $matches[1]; $argLine = $matches[2]
+        }
+        if ((-not [string]::IsNullOrWhiteSpace($exePath)) -and (Test-Path $exePath)) {
+            try {
+                if ([string]::IsNullOrWhiteSpace($argLine)) {
+                    Start-Process -FilePath $exePath -ErrorAction Stop
+                } else {
+                    Start-Process -FilePath $exePath -ArgumentList $argLine -ErrorAction Stop
+                }
+                $relaunched = $true
+            } catch {
+                $relaunched = $false
+            }
+        }
+    }
+    return $relaunched
+}
+
+function Start-RazerFromCommand([string]$Cmd) {
+    if ([string]::IsNullOrWhiteSpace($Cmd)) { return $false }
+    $exePath = ""
+    $argLine = ""
+    if ($Cmd -match '^\s*"([^"]+)"\s*(.*)$') {
+        $exePath = $matches[1]; $argLine = $matches[2]
+    } elseif ($Cmd -match '^\s*(\S+)\s*(.*)$') {
+        $exePath = $matches[1]; $argLine = $matches[2]
+    }
+    if ([string]::IsNullOrWhiteSpace($exePath) -or -not (Test-Path $exePath)) { return $false }
+    try {
+        if ([string]::IsNullOrWhiteSpace($argLine)) {
+            Start-Process -FilePath $exePath -ErrorAction Stop
+        } else {
+            Start-Process -FilePath $exePath -ArgumentList $argLine -ErrorAction Stop
+        }
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+function Get-RazerExePath {
+    $cmd = Get-RazerLaunchCommand
+    if ($cmd -match '^\s*"([^"]+)"') { return $matches[1] }
+    if ($cmd -match '^\s*(\S+)') { return $matches[1] }
+    return "C:\Program Files\Razer\RazerAppEngine\RazerAppEngine.exe"
+}
+
+function New-RazerLaunchCommand([string]$Apps) {
+    $exe = Get-RazerExePath
+    return ('"' + $exe + '" --url-params=apps=' + $Apps + ' --launch-force-hidden=' + $Apps + ' --autoStart=1')
+}
+
+function Set-RazerAutostart([string]$Apps) {
+    # Adjust the login autostart so Synapse comes back in the same mode after a reboot.
+    # Modifies only the existing value (safe) - never recreates the Run key.
+    $cmd = New-RazerLaunchCommand $Apps
+    $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+    if (Test-Path $runKey) {
+        Set-ItemProperty -Path $runKey -Name 'RazerAppEngine' -Value $cmd -ErrorAction SilentlyContinue
+    }
+}
+
+function Set-RazerChromaServices([string]$StartupType, [bool]$Running) {
+    # Chroma SDK services drive lighting only. Disabling them frees CPU/RAM and blocks respawn.
+    $chroma = @(
+        'Razer Chroma SDK Service',
+        'Razer Chroma SDK Server',
+        'Razer Chroma Stream Server',
+        'Razer Chroma SDK Diagnostic Service'
+    )
+    foreach ($name in $chroma) {
+        $svc = Get-Service -Name $name -ErrorAction SilentlyContinue
+        if ($null -ne $svc) {
+            try { Set-Service -Name $name -StartupType $StartupType -ErrorAction SilentlyContinue } catch {}
+            if ($Running) {
+                Start-Service -Name $name -ErrorAction SilentlyContinue
+            } else {
+                Stop-Service -Name $name -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
+function Stop-RazerChromaProcesses {
+    $names = @(
+        'RzAppManager','RzBTLEManager','RzChromaConnectManager','RzChromaConnectServer',
+        'RzChromaStreamServer','RzDeviceManager','RzDeviceManagerEx','RzIoTDeviceManager',
+        'RzSmartlightingDeviceManager','RzWDLDeviceManager','razerwdl'
+    )
+    Get-Process -Name $names -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+}
+
+function Ensure-RazerMacroEngine {
+    # Game Manager Service 3 = macros. Keep it enabled + running.
+    $gms = Get-Service -Name 'Razer Game Manager Service 3' -ErrorAction SilentlyContinue
+    if ($null -ne $gms) {
+        try { Set-Service -Name 'Razer Game Manager Service 3' -StartupType Automatic -ErrorAction SilentlyContinue } catch {}
+        Start-Service -Name 'Razer Game Manager Service 3' -ErrorAction SilentlyContinue
+    }
+}
+
+function Set-RazerGamingMode {
+    # Min-resource mode: lighting OFF + blocked (Chroma services disabled), macros KEPT.
+    Set-RazerChromaServices -StartupType 'Disabled' -Running $false
+    Set-RazerAutostart -Apps 'synapse'
+    Stop-RazerChromaProcesses
+    Get-Process -Name 'RazerAppEngine','RzEngineMon' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 1500
+    Ensure-RazerMacroEngine
+    return (Start-RazerFromCommand (New-RazerLaunchCommand 'synapse'))
+}
+
+function Set-RazerFullMode {
+    # Restore everything: lighting + macros.
+    Set-RazerChromaServices -StartupType 'Automatic' -Running $true
+    Set-RazerAutostart -Apps 'synapse,chroma-app'
+    Ensure-RazerMacroEngine
+    Get-Process -Name 'RazerAppEngine','RzEngineMon' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 1500
+    return (Start-RazerFromCommand (New-RazerLaunchCommand 'synapse,chroma-app'))
 }
 
 function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
@@ -1681,6 +1891,87 @@ if ($RemoteFix) {
     }
     if (-not [string]::IsNullOrWhiteSpace($remoteSnapshot.TailscaleIp)) {
         Write-Host ((Paint "   Tailscale IP: " $S.Cyan) + $remoteSnapshot.TailscaleIp)
+    }
+    exit 0
+}
+
+if ($FixRazer) {
+    Step "Inspect Razer Synapse processes"
+    $beforeRazer = Get-RazerSnapshot
+    Show-RazerSnapshot -Snapshot $beforeRazer
+
+    Step "Repair Razer Synapse (clear runaway processes, relaunch clean)"
+    $relaunched = Repair-RazerSynapse
+    Write-Detail "Stopped duplicate RazerAppEngine/RzEngineMon front-end processes; left Game Manager + Elevation services running so macros are preserved; relaunched a single clean Synapse instance."
+
+    Step "Verify Razer Synapse"
+    Start-Sleep -Seconds 3
+    $afterRazer = Get-RazerSnapshot
+    Show-RazerSnapshot -Snapshot $afterRazer
+
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) {
+        Clear-Host
+        Show-Banner
+    }
+    Write-Host ""
+    Write-Host ((Paint "   RazerAppEngine processes: " $S.Cyan) + $beforeRazer.EngineCount + (Paint " -> " $S.Gray) + $afterRazer.EngineCount)
+    Write-Host ((Paint "   Synapse memory (MB):      " $S.Cyan) + $beforeRazer.EngineMemMB + (Paint " -> " $S.Gray) + $afterRazer.EngineMemMB)
+    if ($relaunched) {
+        Write-Host (Paint "   Razer Synapse relaunched clean. Your macros and lighting stay intact." $S.Green)
+    } else {
+        Write-Host (Paint "   Cleared runaway processes, but could not auto-relaunch Synapse. Open Razer Synapse from the Start menu." $S.Yellow)
+    }
+    exit 0
+}
+
+if ($RazerGaming) {
+    Step "Inspect Razer Synapse (before gaming mode)"
+    $beforeRazer = Get-RazerSnapshot
+    Show-RazerSnapshot -Snapshot $beforeRazer
+
+    Step "Apply Razer GAMING mode (lighting off + blocked, macros kept)"
+    $relaunched = Set-RazerGamingMode
+    Write-Detail "Disabled + stopped Razer Chroma lighting services so they cannot consume CPU/RAM or respawn; set autostart to synapse-only; killed lighting + front-end processes; kept Game Manager + Elevation running for macros; relaunched a minimal Synapse."
+
+    Step "Verify Razer (gaming mode)"
+    Start-Sleep -Seconds 3
+    $afterRazer = Get-RazerSnapshot
+    Show-RazerSnapshot -Snapshot $afterRazer
+
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) {
+        Clear-Host
+        Show-Banner
+    }
+    Write-Host ""
+    Write-Host ((Paint "   RazerAppEngine processes: " $S.Cyan) + $beforeRazer.EngineCount + (Paint " -> " $S.Gray) + $afterRazer.EngineCount)
+    Write-Host ((Paint "   Synapse memory (MB):      " $S.Cyan) + $beforeRazer.EngineMemMB + (Paint " -> " $S.Gray) + $afterRazer.EngineMemMB)
+    Write-Host (Paint "   GAMING mode ON: lighting off + blocked (no CPU/RAM/disk use), macros still working." $S.Green)
+    Write-Host (Paint "   Run  -RazerOn  to bring lighting back." $S.Slate)
+    exit 0
+}
+
+if ($RazerOn) {
+    Step "Restore Razer Synapse (full: lighting + macros)"
+    $relaunched = Set-RazerFullMode
+    Write-Detail "Re-enabled + started Razer Chroma lighting services; restored full autostart (synapse + chroma); relaunched full Synapse so lighting and macros both work."
+
+    Step "Verify Razer (full mode)"
+    Start-Sleep -Seconds 3
+    $afterRazer = Get-RazerSnapshot
+    Show-RazerSnapshot -Snapshot $afterRazer
+
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) {
+        Clear-Host
+        Show-Banner
+    }
+    Write-Host ""
+    if ($relaunched) {
+        Write-Host (Paint "   Razer fully restored: lighting + macros are back." $S.Green)
+    } else {
+        Write-Host (Paint "   Re-enabled Razer services, but could not auto-relaunch Synapse. Open it from the Start menu." $S.Yellow)
     }
     exit 0
 }
