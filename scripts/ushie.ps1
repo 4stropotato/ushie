@@ -17,6 +17,8 @@ param(
     [switch]$RazerGaming,
     [Alias("rzon")]
     [switch]$RazerOn,
+    [Alias("rzcheck","rzstatus")]
+    [switch]$RazerStatus,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -546,7 +548,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -563,6 +565,7 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -FixRazer [-v]"
     Write-Host "  .\scripts\ushie.ps1 -RazerGaming [-v]"
     Write-Host "  .\scripts\ushie.ps1 -RazerOn [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -RazerStatus"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -573,6 +576,7 @@ function Show-Manual {
     Write-Host "  -FixRazer       Fix runaway Razer Synapse (clears duplicate RazerAppEngine, relaunches clean; keeps macros)"
     Write-Host "  -RazerGaming    Min-resource mode: lighting off + Chroma services disabled (no CPU/RAM/disk use); keeps macros"
     Write-Host "  -RazerOn        Restore Razer fully: re-enable lighting + macros (undo -RazerGaming)"
+    Write-Host "  -RazerStatus    Read-only checker: shows Razer processes, memory, services, mode + verdict (no admin)"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -593,6 +597,8 @@ function Show-Manual {
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RazerGaming -v"""
     Write-Host (Paint "One-liner (RazerOn):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RazerOn -v"""
+    Write-Host (Paint "One-liner (RazerStatus):" $S.NeonBlue)
+    Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RazerStatus"""
     Write-Host (Paint "One-liner (Help):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -h"""
 }
@@ -847,6 +853,91 @@ function Set-RazerFullMode {
     Get-Process -Name 'RazerAppEngine','RzEngineMon' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
     Start-Sleep -Milliseconds 1500
     return (Start-RazerFromCommand (New-RazerLaunchCommand 'synapse,chroma-app'))
+}
+
+function Get-RazerStatusReport {
+    # Read-only inventory of the current Razer state. No admin needed (reads processes, services, HKCU).
+    $allProcs = @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^(Razer|Rz|GameManager)' })
+    $engine = @($allProcs | Where-Object { $_.Name -eq 'RazerAppEngine' })
+    $totalMem = 0
+    if ($allProcs.Count -gt 0) { $totalMem = [math]::Round((($allProcs | Measure-Object WorkingSet64 -Sum).Sum) / 1MB, 0) }
+    $engineMem = 0
+    if ($engine.Count -gt 0) { $engineMem = [math]::Round((($engine | Measure-Object WorkingSet64 -Sum).Sum) / 1MB, 0) }
+
+    $chromaNames = @('Razer Chroma SDK Service', 'Razer Chroma SDK Server', 'Razer Chroma Stream Server', 'Razer Chroma SDK Diagnostic Service')
+    $chromaTotal = 0; $chromaRunning = 0; $chromaDisabled = 0
+    foreach ($n in $chromaNames) {
+        $svc = Get-CimInstance -ClassName Win32_Service -Filter ("Name='" + $n + "'") -ErrorAction SilentlyContinue
+        if ($null -ne $svc) {
+            $chromaTotal++
+            if ($svc.State -eq 'Running') { $chromaRunning++ }
+            if ($svc.StartMode -eq 'Disabled') { $chromaDisabled++ }
+        }
+    }
+    $chromaSummary = ("" + $chromaRunning + "/" + $chromaTotal + " running")
+    if ($chromaDisabled -gt 0) { $chromaSummary = $chromaSummary + ", " + $chromaDisabled + " disabled" }
+
+    $gms = Get-CimInstance -ClassName Win32_Service -Filter "Name='Razer Game Manager Service 3'" -ErrorAction SilentlyContinue
+    $gmsState = if ($null -ne $gms) { $gms.State } else { "Missing" }
+    $elev = Get-CimInstance -ClassName Win32_Service -Filter "Name='Razer Elevation Service'" -ErrorAction SilentlyContinue
+    $elevState = if ($null -ne $elev) { $elev.State } else { "Missing" }
+
+    $autostart = "unknown"
+    $runProps = Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -ErrorAction SilentlyContinue
+    if (($null -ne $runProps) -and ($runProps.PSObject.Properties.Name -contains 'RazerAppEngine')) {
+        $runVal = [string]$runProps.RazerAppEngine
+        if ($runVal -match 'chroma-app') { $autostart = "full (synapse + chroma)" }
+        elseif ($runVal -match 'apps=synapse') { $autostart = "synapse-only (gaming)" }
+    }
+
+    $verdict = "Mixed / partial state"
+    $rec = ""
+    if ($engine.Count -gt 6) {
+        $verdict = "RUNAWAY processes detected"
+        $rec = "Run  -FixRazer  to clear the duplicates."
+    } elseif (($chromaTotal -gt 0) -and ($chromaDisabled -eq $chromaTotal) -and ($chromaRunning -eq 0)) {
+        $verdict = "GAMING mode active (lighting OFF + blocked)"
+        $rec = "Run  -RazerOn  to bring lighting back."
+    } elseif (($chromaTotal -gt 0) -and ($chromaRunning -eq $chromaTotal)) {
+        $verdict = "FULL mode (lighting ON)"
+        $rec = "Run  -RazerGaming  before gaming to cut resources."
+    }
+
+    return [PSCustomObject]@{
+        EngineCount      = $engine.Count
+        EngineMemMB      = $engineMem
+        TotalCount       = $allProcs.Count
+        TotalMemMB       = $totalMem
+        ChromaSummary    = $chromaSummary
+        GameManagerState = $gmsState
+        ElevationState   = $elevState
+        AutostartMode    = $autostart
+        Verdict          = $verdict
+        Recommendation   = $rec
+    }
+}
+
+function Show-RazerStatus {
+    $r = Get-RazerStatusReport
+    $engineLevel = if ($r.EngineCount -le 4) { "OK" } else { "WARN" }
+    $macroLevel = if ($r.GameManagerState -eq "Running") { "OK" } else { "WARN" }
+    Write-Host ""
+    Write-Host (Paint "   RAZER STATUS CHECK (read-only)" $S.NeonBlue)
+    Write-Host (Paint "   -----------------------------" $S.Gray)
+    Print-Result "RazerAppEngineProcesses" $r.EngineCount $engineLevel
+    Print-Result "RazerAppEngineMemoryMB" $r.EngineMemMB $engineLevel
+    Print-Result "TotalRazerProcesses" $r.TotalCount "OK"
+    Print-Result "TotalRazerMemoryMB" $r.TotalMemMB "OK"
+    Print-Result "ChromaLighting" $r.ChromaSummary "OK"
+    Print-Result "GameManager(Macros)" $r.GameManagerState $macroLevel
+    Print-Result "ElevationService" $r.ElevationState "OK"
+    Print-Result "AutostartMode" $r.AutostartMode "OK"
+    Write-Host ""
+    Write-Host ((Paint "   VERDICT: " $S.NeonYellow) + $r.Verdict)
+    if (-not [string]::IsNullOrWhiteSpace($r.Recommendation)) {
+        Write-Host (Paint ("   TIP: " + $r.Recommendation) $S.Slate)
+    }
+    Write-Host ""
 }
 
 function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
@@ -1859,6 +1950,12 @@ function Invoke-InternalVerify {
 if ($Manual) {
     Show-Banner
     Show-Manual
+    exit 0
+}
+
+if ($RazerStatus) {
+    Show-Banner
+    Show-RazerStatus
     exit 0
 }
 
