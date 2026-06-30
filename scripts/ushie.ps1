@@ -17,6 +17,8 @@ param(
     [switch]$RazerGaming,
     [Alias("rzon")]
     [switch]$RazerOn,
+    [Alias("rzkill","killrazer")]
+    [switch]$RazerKill,
     [Alias("rzcheck","rzstatus")]
     [switch]$RazerStatus,
     [Alias("undo","rollback")]
@@ -572,7 +574,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($StartupClean) { "STARTUP CLEAN (KEEP ALLOWLIST)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerKill) { "RAZER KILL-ALL (OFF)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($StartupClean) { "STARTUP CLEAN (KEEP ALLOWLIST)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -589,6 +591,7 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -FixRazer [-v]"
     Write-Host "  .\scripts\ushie.ps1 -RazerGaming [-v]"
     Write-Host "  .\scripts\ushie.ps1 -RazerOn [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -RazerKill"
     Write-Host "  .\scripts\ushie.ps1 -RazerStatus"
     Write-Host "  .\scripts\ushie.ps1 -Restore [-v]"
     Write-Host "  .\scripts\ushie.ps1 -Net | -Memory | -Gpu | -Storage | -Cpu [-v]"
@@ -608,6 +611,7 @@ function Show-Manual {
     Write-Host "  -FixRazer       Fix runaway Razer Synapse (clears duplicate RazerAppEngine, relaunches clean; keeps macros)"
     Write-Host "  -RazerGaming    Min-resource mode: lighting off + Chroma services disabled (no CPU/RAM/disk use); keeps macros"
     Write-Host "  -RazerOn        Restore Razer fully: re-enable lighting + macros (undo -RazerGaming)"
+    Write-Host "  -RazerKill      Terminate ALL Razer processes + stop services (no manual End Task); relaunch Synapse to use again"
     Write-Host "  -RazerStatus    Read-only checker: shows Razer processes, memory, services, mode + verdict (no admin)"
     Write-Host "  -Restore        Undo: re-import the latest ushie registry backup + list System Restore points"
     Write-Host "  -Net            Focused: network/connection/packet tweaks only (backs up first)"
@@ -711,6 +715,19 @@ function Show-RemoteAccessSnapshot([object]$Snapshot) {
     if ($null -ne $Snapshot.Sshd) {
         Print-Result "sshd" $Snapshot.Sshd.Status $(if ($Snapshot.Sshd.Status -eq "Running") { "OK" } else { "WARN" })
     }
+}
+
+function Stop-AllRazer {
+    # Hard kill EVERYTHING Razer: stop services first (so they don't respawn), then kill any
+    # remaining processes. Nothing is disabled or relaunched - services can start again on next
+    # Synapse launch / reboot. No registry change (no backup needed).
+    $svcs = @(
+        'Razer Game Manager Service 3', 'Razer Chroma SDK Service', 'Razer Chroma SDK Server',
+        'Razer Chroma Stream Server', 'Razer Chroma SDK Diagnostic Service', 'Razer Elevation Service'
+    )
+    foreach ($s in $svcs) { Stop-Service -Name $s -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 800
+    Get-Process | Where-Object { $_.Name -match '^(Razer|Rz|GameManager)' } | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
 function Get-RazerLaunchCommand {
@@ -2580,6 +2597,24 @@ if ($RazerOn) {
     } else {
         Write-Host (Paint "   Re-enabled Razer services, but could not auto-relaunch Synapse. Open it from the Start menu." $S.Yellow)
     }
+    exit 0
+}
+
+if ($RazerKill) {
+    Step "Inspect Razer footprint"
+    $rkBefore = @(Get-Process | Where-Object { $_.Name -match '^(Razer|Rz|GameManager)' })
+    $rkMem = if ($rkBefore.Count -gt 0) { [math]::Round((($rkBefore | Measure-Object WorkingSet64 -Sum).Sum) / 1MB, 0) } else { 0 }
+    Print-Result "RazerProcesses" $rkBefore.Count "OK"
+    Print-Result "RazerMemoryMB" $rkMem "OK"
+
+    Step "Terminate ALL Razer processes + stop services"
+    Stop-AllRazer
+    Start-Sleep -Seconds 2
+    $rkAfter = @(Get-Process | Where-Object { $_.Name -match '^(Razer|Rz|GameManager)' })
+    Write-Detail "Stopped Razer services (Game Manager, Chroma, Elevation) and force-killed all Razer processes. Nothing disabled or relaunched."
+
+    Complete-StandaloneRun ("Razer terminated: " + $rkBefore.Count + " -> " + $rkAfter.Count + " processes (" + $rkMem + " MB freed).") $S.Green
+    Write-Host (Paint "   To use macros/lighting again: open Razer Synapse (or run -RazerOn)." $S.Slate)
     exit 0
 }
 
