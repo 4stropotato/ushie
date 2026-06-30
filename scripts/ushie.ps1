@@ -39,6 +39,8 @@ param(
     [switch]$Startup,
     [Alias("vbs")]
     [switch]$RiskyBoost,
+    [Alias("svc")]
+    [switch]$Services,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -568,7 +570,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -592,6 +594,7 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -Boost [-v]"
     Write-Host "  .\scripts\ushie.ps1 -Startup"
     Write-Host "  .\scripts\ushie.ps1 -RiskyBoost [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -Services [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -613,6 +616,7 @@ function Show-Manual {
     Write-Host "  -Boost          Safe max-perf posture + thermal readout + manual undervolt/overclock playbook"
     Write-Host "  -Startup        Read-only: list startup programs (Run keys + Startup folder) (no admin)"
     Write-Host "  -RiskyBoost     OPT-IN: disable VBS/Memory Integrity for gaming FPS (lowers a security layer)"
+    Write-Host "  -Services       Debloat non-essential services (conservative, Manual-first, RDP-safe, reversible)"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -1124,6 +1128,24 @@ function Show-UndervoltPlaybook {
     Write-Host "     - Keep CPU < ~90 C, GPU < ~80 C under load. Hotter = back off."
     Write-Host "     - Any crash/BSOD/artifact = too aggressive; raise voltage / lower clock."
     Write-Host "     - Run  -Temp  before and after to compare."
+}
+
+function Optimize-Services {
+    # Conservative, reversible. Disable = clearly safe; Manual = on-demand (Chris Titus style).
+    # Deliberately AVOIDS network/RDP/audio/search/security/input services (RDP-safe).
+    $disable = @('DiagTrack', 'dmwappushservice', 'RetailDemo', 'RemoteRegistry')
+    $manual  = @('MapsBroker', 'Fax', 'WMPNetworkSvc', 'WerSvc', 'lfsvc', 'PcaSvc', 'DusmSvc')
+    foreach ($s in $disable) {
+        if ($null -ne (Get-Service -Name $s -ErrorAction SilentlyContinue)) {
+            cmd /c "sc.exe config `"$s`" start= disabled >nul 2>&1" | Out-Null
+            cmd /c "sc.exe stop `"$s`" >nul 2>&1" | Out-Null
+        }
+    }
+    foreach ($s in $manual) {
+        if ($null -ne (Get-Service -Name $s -ErrorAction SilentlyContinue)) {
+            cmd /c "sc.exe config `"$s`" start= demand >nul 2>&1" | Out-Null
+        }
+    }
 }
 
 function Optimize-Latency {
@@ -2377,6 +2399,18 @@ if ($RiskyBoost) {
     exit 0
 }
 
+if ($Services) {
+    Step "Backup registry + System Restore point (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Debloat non-essential Windows services (conservative, RDP-safe)"
+    Optimize-Services
+    Write-Detail "Disabled: DiagTrack, dmwappushservice, RetailDemo, RemoteRegistry. Set to Manual: MapsBroker, Fax, WMPNetworkSvc, WerSvc, lfsvc, PcaSvc, DusmSvc. Network/RDP/audio/search/security/input services left untouched."
+    Complete-StandaloneRun "Services debloated (conservative + reversible). Reboot to fully apply." $S.Green
+    Write-Host (Paint "   Undo: a 'Before-Ushie' System Restore point (restores service start types), or re-enable in services.msc." $S.Slate)
+    exit 0
+}
+
 if ($RemoteFix) {
     Step "Repair remote access stack (RDP/Tailscale/SSH)"
     Repair-RemoteAccessStack
@@ -2721,6 +2755,9 @@ if ($script:RunProfile -eq "Extreme") {
     Optimize-Cpu
     Optimize-Latency
     Write-Detail "Applied: CPU power throttling off, foreground priority boost (Win32PrioritySeparation=38), core unparking (100% min cores), USB selective suspend off, PCIe ASPM off, Game Mode on."
+    Step "Debloat non-essential services (conservative, RDP-safe)"
+    Optimize-Services
+    Write-Detail "Disabled telemetry/remote services; set unused ones to Manual. Network/RDP/audio/search/security untouched."
 }
 
 if ($script:RunProfile -eq "Extreme") {
