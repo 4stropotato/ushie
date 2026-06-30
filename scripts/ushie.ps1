@@ -41,6 +41,8 @@ param(
     [switch]$RiskyBoost,
     [Alias("svc")]
     [switch]$Services,
+    [Alias("cleanstartup")]
+    [switch]$StartupClean,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -570,7 +572,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($StartupClean) { "STARTUP CLEAN (KEEP ALLOWLIST)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -595,6 +597,7 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -Startup"
     Write-Host "  .\scripts\ushie.ps1 -RiskyBoost [-v]"
     Write-Host "  .\scripts\ushie.ps1 -Services [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -StartupClean [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -617,6 +620,7 @@ function Show-Manual {
     Write-Host "  -Startup        Read-only: list startup programs (Run keys + Startup folder) (no admin)"
     Write-Host "  -RiskyBoost     OPT-IN: disable VBS/Memory Integrity for gaming FPS (lowers a security layer)"
     Write-Host "  -Services       Debloat non-essential services (conservative, Manual-first, RDP-safe, reversible)"
+    Write-Host "  -StartupClean   Remove all startup entries except allowlist (Tailscale, Voicemeeter); reversible"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -1130,6 +1134,52 @@ function Show-UndervoltPlaybook {
     Write-Host "     - Run  -Temp  before and after to compare."
 }
 
+function Optimize-StartupClean([string]$BackupDir) {
+    # Remove all auto-start entries EXCEPT the allowlist. Reversible: Run values are in the
+    # registry backup (reg-import re-adds them); Startup-folder shortcuts are MOVED into the backup.
+    $keep = @('tailscale', 'voicemeeter', 'voicemeter')
+    $removed = 0
+    $runKeys = @(
+        'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run',
+        'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
+    )
+    foreach ($k in $runKeys) {
+        if (Test-Path $k) {
+            $props = Get-ItemProperty -Path $k -ErrorAction SilentlyContinue
+            if ($null -ne $props) {
+                foreach ($pr in $props.PSObject.Properties) {
+                    if ($pr.Name -notmatch '^PS(Path|ParentPath|ChildName|Drive|Provider)$') {
+                        $hay = ($pr.Name + ' ' + [string]$pr.Value).ToLower()
+                        $keepIt = $false
+                        foreach ($w in $keep) { if ($hay -like ('*' + $w + '*')) { $keepIt = $true } }
+                        if (-not $keepIt) {
+                            Remove-ItemProperty -Path $k -Name $pr.Name -ErrorAction SilentlyContinue
+                            $removed++
+                        }
+                    }
+                }
+            }
+        }
+    }
+    $folders = @([Environment]::GetFolderPath('Startup'), [Environment]::GetFolderPath('CommonStartup'))
+    foreach ($folder in $folders) {
+        if ((-not [string]::IsNullOrWhiteSpace($folder)) -and (Test-Path $folder)) {
+            foreach ($f in @(Get-ChildItem -Path $folder -File -ErrorAction SilentlyContinue)) {
+                $keepIt = $false
+                foreach ($w in $keep) { if ($f.Name.ToLower() -like ('*' + $w + '*')) { $keepIt = $true } }
+                if (-not $keepIt) {
+                    try {
+                        Move-Item -Path $f.FullName -Destination (Join-Path $BackupDir $f.Name) -Force -ErrorAction Stop
+                        $removed++
+                    } catch {}
+                }
+            }
+        }
+    }
+    return $removed
+}
+
 function Optimize-Services {
     # Conservative, reversible. Disable = clearly safe; Manual = on-demand (Chris Titus style).
     # Deliberately AVOIDS network/RDP/audio/search/security/input services (RDP-safe).
@@ -1303,6 +1353,9 @@ function Backup-Registry([string]$BackupDir) {
     Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" (Join-Path $BackupDir "HKLM_PowerThrottling.reg")
     Export-RegKeyIfExists "HKCU\Software\Microsoft\GameBar" (Join-Path $BackupDir "HKCU_GameBar.reg")
     Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard" (Join-Path $BackupDir "HKLM_DeviceGuard.reg")
+    Export-RegKeyIfExists "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" (Join-Path $BackupDir "HKCU_Run.reg")
+    Export-RegKeyIfExists "HKLM\Software\Microsoft\Windows\CurrentVersion\Run" (Join-Path $BackupDir "HKLM_Run.reg")
+    Export-RegKeyIfExists "HKLM\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run" (Join-Path $BackupDir "HKLM_Run32.reg")
 }
 
 function Get-LatestUshieBackup {
@@ -2396,6 +2449,18 @@ if ($RiskyBoost) {
     Write-Host (Paint "   WARNING: this lowers a Windows security layer (Core Isolation). Only worth it for gaming FPS." $S.NeonPink)
     Write-Host (Paint "   Re-enable via Windows Security > Core Isolation, OR a 'Before-Ushie' System Restore point." $S.Slate)
     Write-Host (Paint ("   Undo (safe tweaks):  -Restore   (backup: " + $catBackup + ")") $S.Slate)
+    exit 0
+}
+
+if ($StartupClean) {
+    Step "Backup registry + System Restore point (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Remove startup entries (keep only Tailscale + Voicemeeter)"
+    $removed = Optimize-StartupClean -BackupDir $catBackup
+    Write-Detail ("Removed " + $removed + " startup entries; kept Tailscale (service) + Voicemeeter. Run-key values are in the backup; Startup-folder shortcuts moved into the backup folder.")
+    Complete-StandaloneRun ("Startup cleaned: " + $removed + " entries removed. Razer + apps no longer auto-start (launch when needed).") $S.Green
+    Write-Host (Paint ("   Undo:  -Restore  (backup: " + $catBackup + ")  - re-adds Run entries; move shortcuts back from the backup folder.") $S.Slate)
     exit 0
 }
 
