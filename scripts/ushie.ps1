@@ -31,6 +31,10 @@ param(
     [switch]$Storage,
     [Alias("processor")]
     [switch]$Cpu,
+    [Alias("temps","thermal")]
+    [switch]$Temp,
+    [Alias("turbo")]
+    [switch]$Boost,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -560,7 +564,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -580,6 +584,8 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -RazerStatus"
     Write-Host "  .\scripts\ushie.ps1 -Restore [-v]"
     Write-Host "  .\scripts\ushie.ps1 -Net | -Memory | -Gpu | -Storage | -Cpu [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -Temp"
+    Write-Host "  .\scripts\ushie.ps1 -Boost [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -597,6 +603,8 @@ function Show-Manual {
     Write-Host "  -Gpu            Focused: GPU tweaks only (HAGS, GameDVR off) (backs up first)"
     Write-Host "  -Storage        Focused: storage/NTFS + cache cleanup only (backs up first)"
     Write-Host "  -Cpu            Focused: CPU tweaks only (power-throttling off, core unpark, priority) (backs up first)"
+    Write-Host "  -Temp           Read-only: CPU/GPU temperature, clocks, utilization, power draw (no admin)"
+    Write-Host "  -Boost          Safe max-perf posture + thermal readout + manual undervolt/overclock playbook"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -621,6 +629,10 @@ function Show-Manual {
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RazerStatus"""
     Write-Host (Paint "One-liner (Restore):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -Restore -v"""
+    Write-Host (Paint "One-liner (Temp):" $S.NeonBlue)
+    Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -Temp"""
+    Write-Host (Paint "One-liner (Boost):" $S.NeonBlue)
+    Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -Boost -v"""
     Write-Host (Paint "One-liner (Help):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -h"""
 }
@@ -1020,6 +1032,73 @@ function Optimize-Cpu {
     reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f | Out-Null
     cmd /c "powercfg -setacvalueindex SCHEME_CURRENT SUB_PROCESSOR CPMINCORES 100 >nul 2>&1" | Out-Null
     cmd /c "powercfg -setactive SCHEME_CURRENT >nul 2>&1" | Out-Null
+}
+
+function Get-NvidiaSmiPath {
+    $cmd = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+    if ($null -ne $cmd) { return $cmd.Source }
+    $candidates = @(
+        (Join-Path $env:SystemRoot "System32\nvidia-smi.exe"),
+        "C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe"
+    )
+    foreach ($c in $candidates) { if (Test-Path $c) { return $c } }
+    return ""
+}
+
+function Show-ThermalReadout {
+    Write-Host ""
+    Write-Host (Paint "   THERMAL / PERFORMANCE READOUT" $S.NeonBlue)
+    Write-Host (Paint "   ----------------------------" $S.Gray)
+    $cpuTemp = "n/a"
+    try {
+        $tz = Get-CimInstance -Namespace "root/wmi" -ClassName MSAcpi_ThermalZoneTemperature -ErrorAction Stop | Select-Object -First 1
+        if (($null -ne $tz) -and ($tz.CurrentTemperature -gt 0)) {
+            $cpuTemp = ("" + [math]::Round(($tz.CurrentTemperature / 10) - 273.15, 0) + " C")
+        }
+    } catch {}
+    Print-Result "CPU_Temp(ACPI)" $cpuTemp $(if ($cpuTemp -eq "n/a") { "WARN" } else { "OK" })
+    $smi = Get-NvidiaSmiPath
+    if (-not [string]::IsNullOrWhiteSpace($smi)) {
+        $line = (& $smi --query-gpu=temperature.gpu,utilization.gpu,clocks.sm,power.draw,power.limit --format=csv,noheader,nounits 2>$null | Select-Object -First 1)
+        if (-not [string]::IsNullOrWhiteSpace($line)) {
+            $parts = @(($line -split ',') | ForEach-Object { $_.Trim() })
+            if ($parts.Count -ge 5) {
+                Print-Result "GPU_Temp" ($parts[0] + " C") "OK"
+                Print-Result "GPU_Util" ($parts[1] + " %") "OK"
+                Print-Result "GPU_Clock" ($parts[2] + " MHz") "OK"
+                Print-Result "GPU_Power" ($parts[3] + " / " + $parts[4] + " W") "OK"
+            }
+        }
+    } else {
+        Print-Result "GPU(nvidia-smi)" "not found" "WARN"
+    }
+}
+
+function Show-UndervoltPlaybook {
+    Write-Host ""
+    Write-Host (Paint "   LAPTOP-SAFE UNDERVOLT / OVERCLOCK PLAYBOOK (manual, do this AT the laptop)" $S.NeonYellow)
+    Write-Host (Paint "   -----------------------------------------------------------------------" $S.Gray)
+    Write-Host "   Undervolting LOWERS heat + throttling (faster sustained perf) and CANNOT"
+    Write-Host "   damage hardware - worst case is an unstable boot you reset. Overclocking a"
+    Write-Host "   laptop is NOT recommended. Do these only when PHYSICALLY at the laptop"
+    Write-Host "   (a crash over RDP can lock you out)."
+    Write-Host ""
+    Write-Host (Paint "   CPU undervolt (Intel i7-10750H) - tool: ThrottleStop" $S.NeonMint)
+    Write-Host "     1. Install ThrottleStop, open FIVR."
+    Write-Host "     2. CPU Core -50 mV, Cache -50 mV. Apply."
+    Write-Host "     3. Stress test (TS Bench / a game) ~15-30 min."
+    Write-Host "     4. If stable, lower Core in -10 mV steps (core can go lower than cache,"
+    Write-Host "        e.g. cache -100 mV, core -150/-200 mV). Back off 10-20 mV from first crash."
+    Write-Host "     NOTE: ASUS BIOS may LOCK undervolt (Plundervolt). If -50 mV does nothing, skip."
+    Write-Host ""
+    Write-Host (Paint "   GPU (NVIDIA RTX 2060 laptop) - tool: MSI Afterburner" $S.NeonMint)
+    Write-Host "     - Undervolt curve ~0.8-0.85V = cooler + similar/faster; OR mild +100 core /"
+    Write-Host "       +200 mem offset, test, back off on artifacts. Resets on reboot unless saved."
+    Write-Host ""
+    Write-Host (Paint "   THRESHOLDS (you have an external cooler):" $S.NeonPink)
+    Write-Host "     - Keep CPU < ~90 C, GPU < ~80 C under load. Hotter = back off."
+    Write-Host "     - Any crash/BSOD/artifact = too aggressive; raise voltage / lower clock."
+    Write-Host "     - Run  -Temp  before and after to compare."
 }
 
 function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
@@ -2067,6 +2146,14 @@ if ($RazerStatus) {
     exit 0
 }
 
+if ($Temp) {
+    Show-Banner
+    Show-ThermalReadout
+    Write-Host ""
+    Write-Host (Paint "   Tip: run -Boost for the safe max-perf posture + undervolt/overclock playbook." $S.Slate)
+    exit 0
+}
+
 Assert-Admin
 $dnsServersText = ""
 if ($DnsServers -and $DnsServers.Count -gt 0) {
@@ -2170,6 +2257,23 @@ if ($Cpu) {
     Write-Detail "Applied: CPU power throttling off, foreground priority boost (Win32PrioritySeparation=38), core unparking (100% min cores), SystemResponsiveness=10."
     Complete-StandaloneRun "CPU optimized (focused). Reboot recommended for full effect." $S.Green
     Write-Host (Paint ("   Undo anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
+    exit 0
+}
+
+if ($Boost) {
+    Step "Backup registry (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Apply safe max-performance posture (no hardware risk)"
+    $boostPlan = Set-MaxPerformancePlan
+    Optimize-Cpu
+    Write-Detail ("Applied: max-performance power plan (" + $boostPlan + "), CPU power throttling off, core unparking, foreground priority boost.")
+    Step "Thermal / performance readout"
+    Show-ThermalReadout
+    Complete-StandaloneRun "Safe performance boost applied. Undervolt/overclock is MANUAL - see playbook below." $S.Green
+    Show-UndervoltPlaybook
+    Write-Host ""
+    Write-Host (Paint ("   Undo the safe tweaks anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
     exit 0
 }
 
