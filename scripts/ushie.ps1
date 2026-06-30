@@ -29,6 +29,8 @@ param(
     [switch]$Gpu,
     [Alias("disk")]
     [switch]$Storage,
+    [Alias("processor")]
+    [switch]$Cpu,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -558,7 +560,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -577,7 +579,7 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -RazerOn [-v]"
     Write-Host "  .\scripts\ushie.ps1 -RazerStatus"
     Write-Host "  .\scripts\ushie.ps1 -Restore [-v]"
-    Write-Host "  .\scripts\ushie.ps1 -Net | -Memory | -Gpu | -Storage [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -Net | -Memory | -Gpu | -Storage | -Cpu [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -594,6 +596,7 @@ function Show-Manual {
     Write-Host "  -Memory         Focused: memory tweaks only (MMAgent, paging) (backs up first)"
     Write-Host "  -Gpu            Focused: GPU tweaks only (HAGS, GameDVR off) (backs up first)"
     Write-Host "  -Storage        Focused: storage/NTFS + cache cleanup only (backs up first)"
+    Write-Host "  -Cpu            Focused: CPU tweaks only (power-throttling off, core unpark, priority) (backs up first)"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -1010,6 +1013,15 @@ function Optimize-Storage {
     Clear-TempAndCache -CurrentProfile "Extreme"
 }
 
+function Optimize-Cpu {
+    # PowerThrottling off + foreground priority boost + unpark all cores. Safe + reversible (plugged-in laptop).
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" /v PowerThrottlingOff /t REG_DWORD /d 1 /f | Out-Null
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 38 /f | Out-Null
+    reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d 10 /f | Out-Null
+    cmd /c "powercfg -setacvalueindex SCHEME_CURRENT SUB_PROCESSOR CPMINCORES 100 >nul 2>&1" | Out-Null
+    cmd /c "powercfg -setactive SCHEME_CURRENT >nul 2>&1" | Out-Null
+}
+
 function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
     $tag = "[OK]"
     $color = $S.Green
@@ -1111,6 +1123,8 @@ function Backup-Registry([string]$BackupDir) {
     Export-RegKeyIfExists "HKCU\System\GameConfigStore" (Join-Path $BackupDir "HKCU_GameConfigStore.reg")
     Export-RegKeyIfExists "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" (Join-Path $BackupDir "HKLM_GameDVRPolicy.reg")
     Export-RegKeyIfExists "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" (Join-Path $BackupDir "HKCU_GameDVR.reg")
+    Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" (Join-Path $BackupDir "HKLM_PriorityControl.reg")
+    Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" (Join-Path $BackupDir "HKLM_PowerThrottling.reg")
 }
 
 function Get-LatestUshieBackup {
@@ -2147,6 +2161,18 @@ if ($Storage) {
     exit 0
 }
 
+if ($Cpu) {
+    Step "Backup registry (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Optimize CPU responsiveness"
+    Optimize-Cpu
+    Write-Detail "Applied: CPU power throttling off, foreground priority boost (Win32PrioritySeparation=38), core unparking (100% min cores), SystemResponsiveness=10."
+    Complete-StandaloneRun "CPU optimized (focused). Reboot recommended for full effect." $S.Green
+    Write-Host (Paint ("   Undo anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
+    exit 0
+}
+
 if ($RemoteFix) {
     Step "Repair remote access stack (RDP/Tailscale/SSH)"
     Repair-RemoteAccessStack
@@ -2485,6 +2511,12 @@ if ($script:RunProfile -eq "Extreme") {
 }
 $activeSchemeLine = (powercfg /GETACTIVESCHEME | Out-String).Trim()
 Write-Host $activeSchemeLine
+
+if ($script:RunProfile -eq "Extreme") {
+    Step "Apply extra CPU responsiveness tweaks"
+    Optimize-Cpu
+    Write-Detail "Applied: CPU power throttling off, foreground priority boost (Win32PrioritySeparation=38), core unparking (100% min cores)."
+}
 
 if ($script:RunProfile -eq "Extreme") {
     $razerPresent = ($null -ne (Get-Service -Name 'Razer Game Manager Service 3' -ErrorAction SilentlyContinue)) -or (@(Get-Process -Name RazerAppEngine -ErrorAction SilentlyContinue).Count -gt 0)
