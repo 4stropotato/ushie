@@ -19,6 +19,8 @@ param(
     [switch]$RazerOn,
     [Alias("rzcheck","rzstatus")]
     [switch]$RazerStatus,
+    [Alias("undo","rollback")]
+    [switch]$Restore,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -548,7 +550,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -566,6 +568,7 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -RazerGaming [-v]"
     Write-Host "  .\scripts\ushie.ps1 -RazerOn [-v]"
     Write-Host "  .\scripts\ushie.ps1 -RazerStatus"
+    Write-Host "  .\scripts\ushie.ps1 -Restore [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -577,6 +580,7 @@ function Show-Manual {
     Write-Host "  -RazerGaming    Min-resource mode: lighting off + Chroma services disabled (no CPU/RAM/disk use); keeps macros"
     Write-Host "  -RazerOn        Restore Razer fully: re-enable lighting + macros (undo -RazerGaming)"
     Write-Host "  -RazerStatus    Read-only checker: shows Razer processes, memory, services, mode + verdict (no admin)"
+    Write-Host "  -Restore        Undo: re-import the latest ushie registry backup + list System Restore points"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -599,6 +603,8 @@ function Show-Manual {
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RazerOn -v"""
     Write-Host (Paint "One-liner (RazerStatus):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -RazerStatus"""
+    Write-Host (Paint "One-liner (Restore):" $S.NeonBlue)
+    Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -Restore -v"""
     Write-Host (Paint "One-liner (Help):" $S.NeonBlue)
     Write-Host "  powershell -NoProfile -ExecutionPolicy Bypass -Command ""& ([ScriptBlock]::Create((irm 'https://raw.githubusercontent.com/4stropotato/ushie/main/scripts/ushie.ps1'))) -h"""
 }
@@ -1035,6 +1041,24 @@ function Backup-Registry([string]$BackupDir) {
     Export-RegKeyIfExists "HKCU\Software\Policies\Microsoft\Windows\Explorer" (Join-Path $BackupDir "HKCU_ExplorerPolicy.reg")
     Export-RegKeyIfExists "HKCU\Software\Microsoft\Windows\CurrentVersion\PushNotifications" (Join-Path $BackupDir "HKCU_PushNotifications.reg")
     Export-RegKeyIfExists "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" (Join-Path $BackupDir "HKCU_Search.reg")
+}
+
+function Get-LatestUshieBackup {
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $env:USERPROFILE "Desktop" }
+    $dirs = @(Get-ChildItem -Path $desktop -Directory -Filter 'ushie_oneshot_backup_*' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    if ($dirs.Count -gt 0) { return $dirs[0].FullName }
+    return ""
+}
+
+function Restore-FromBackup([string]$BackupDir) {
+    $regFiles = @(Get-ChildItem -Path $BackupDir -Filter '*.reg' -ErrorAction SilentlyContinue)
+    $imported = 0
+    foreach ($f in $regFiles) {
+        cmd /c "reg import `"$($f.FullName)`" >nul 2>&1" | Out-Null
+        if ($LASTEXITCODE -eq 0) { $imported++ }
+    }
+    return [PSCustomObject]@{ Total = $regFiles.Count; Imported = $imported }
 }
 
 function Ensure-ExtremeRestorePoint {
@@ -1965,6 +1989,45 @@ if ($DnsServers -and $DnsServers.Count -gt 0) {
     $dnsServersText = (($DnsServers | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }) -join ",")
 }
 Write-Detail ("Selected mode: " + $script:RunProfile + ", Dns=" + $Dns + ", DnsServers=" + $dnsServersText + ", KeepWSL=" + $KeepWSL + ", SkipVerify=" + $SkipVerify + ", VerifyOnly=" + $VerifyOnly + ", NoRestore=" + $NoRestore + ", RemoteFix=" + $RemoteFix)
+
+if ($Restore) {
+    Step "Find latest ushie backup"
+    $backupDir = Get-LatestUshieBackup
+    if ([string]::IsNullOrWhiteSpace($backupDir)) {
+        Print-Result "BackupFound" "None on Desktop (ushie_oneshot_backup_*)" "WARN"
+    } else {
+        Print-Result "BackupFolder" $backupDir "OK"
+        Step "Restore registry from backup"
+        $res = Restore-FromBackup -BackupDir $backupDir
+        Print-Result "RegFilesImported" (("" + $res.Imported) + " / " + $res.Total) $(if ($res.Imported -gt 0) { "OK" } else { "WARN" })
+    }
+
+    Step "List System Restore points (deeper rollback)"
+    $rps = @(Get-ComputerRestorePoint -ErrorAction SilentlyContinue | Sort-Object SequenceNumber -Descending | Select-Object -First 5)
+
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) {
+        Clear-Host
+        Show-Banner
+    }
+    Write-Host ""
+    if ($rps.Count -gt 0) {
+        Write-Host (Paint "   System Restore points (newest first):" $S.NeonBlue)
+        foreach ($rp in $rps) {
+            Write-Host ("     #" + $rp.SequenceNumber + "  " + $rp.Description)
+        }
+        Write-Host (Paint "   For a full OS-level rollback, run:  rstrui.exe" $S.Slate)
+    } else {
+        Write-Host (Paint "   No System Restore points found (enable System Protection for deeper rollback)." $S.Gray)
+    }
+    Write-Host ""
+    if ([string]::IsNullOrWhiteSpace($backupDir)) {
+        Write-Host (Paint "   No ushie registry backup found to undo from. Use a System Restore point above if needed." $S.Yellow)
+    } else {
+        Write-Host (Paint "   Registry restored from latest backup. Reboot to fully apply the reverted settings." $S.Green)
+    }
+    exit 0
+}
 
 if ($RemoteFix) {
     Step "Repair remote access stack (RDP/Tailscale/SSH)"
