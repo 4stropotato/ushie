@@ -2305,6 +2305,18 @@ if ($script:RunProfile -eq "Extreme") {
 $activeSchemeLine = (powercfg /GETACTIVESCHEME | Out-String).Trim()
 Write-Host $activeSchemeLine
 
+if ($script:RunProfile -eq "Extreme") {
+    $razerPresent = ($null -ne (Get-Service -Name 'Razer Game Manager Service 3' -ErrorAction SilentlyContinue)) -or (@(Get-Process -Name RazerAppEngine -ErrorAction SilentlyContinue).Count -gt 0)
+    if ($razerPresent) {
+        Step "Clean up runaway Razer Synapse (clear duplicates, keep macros + lighting)"
+        $rzBefore = Get-RazerSnapshot
+        $null = Repair-RazerSynapse
+        Start-Sleep -Seconds 2
+        $rzAfter = Get-RazerSnapshot
+        Write-Detail ("Cleared duplicate RazerAppEngine hosts and relaunched one clean Synapse. Game Manager + Elevation (macros) and lighting left intact. Engine processes " + $rzBefore.EngineCount + " -> " + $rzAfter.EngineCount + ", memory " + $rzBefore.EngineMemMB + " -> " + $rzAfter.EngineMemMB + " MB.")
+    }
+}
+
 Step "Final snapshot"
 $overlay = "<not set>"
 $dwmKey = Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\Dwm" -ErrorAction SilentlyContinue
