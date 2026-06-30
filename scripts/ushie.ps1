@@ -21,6 +21,14 @@ param(
     [switch]$RazerStatus,
     [Alias("undo","rollback")]
     [switch]$Restore,
+    [Alias("network")]
+    [switch]$Net,
+    [Alias("mem")]
+    [switch]$Memory,
+    [Alias("graphics")]
+    [switch]$Gpu,
+    [Alias("disk")]
+    [switch]$Storage,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -550,7 +558,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -569,6 +577,7 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -RazerOn [-v]"
     Write-Host "  .\scripts\ushie.ps1 -RazerStatus"
     Write-Host "  .\scripts\ushie.ps1 -Restore [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -Net | -Memory | -Gpu | -Storage [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -581,6 +590,10 @@ function Show-Manual {
     Write-Host "  -RazerOn        Restore Razer fully: re-enable lighting + macros (undo -RazerGaming)"
     Write-Host "  -RazerStatus    Read-only checker: shows Razer processes, memory, services, mode + verdict (no admin)"
     Write-Host "  -Restore        Undo: re-import the latest ushie registry backup + list System Restore points"
+    Write-Host "  -Net            Focused: network/connection/packet tweaks only (backs up first)"
+    Write-Host "  -Memory         Focused: memory tweaks only (MMAgent, paging) (backs up first)"
+    Write-Host "  -Gpu            Focused: GPU tweaks only (HAGS, GameDVR off) (backs up first)"
+    Write-Host "  -Storage        Focused: storage/NTFS + cache cleanup only (backs up first)"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -946,6 +959,57 @@ function Show-RazerStatus {
     Write-Host ""
 }
 
+function New-UshieBackup {
+    $desktop = [Environment]::GetFolderPath('Desktop')
+    if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $env:USERPROFILE "Desktop" }
+    $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
+    $dir = Join-Path $desktop "ushie_oneshot_backup_$stamp"
+    New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    Backup-Registry -BackupDir $dir
+    return $dir
+}
+
+function Complete-StandaloneRun([string]$Message, [string]$Color) {
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) {
+        Clear-Host
+        Show-Banner
+    }
+    Write-Host ""
+    Write-Host (Paint ("   " + $Message) $Color)
+}
+
+function Optimize-Network {
+    $mm = "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile"
+    reg add $mm /v NetworkThrottlingIndex /t REG_DWORD /d 4294967295 /f | Out-Null
+    reg add $mm /v SystemResponsiveness /t REG_DWORD /d 10 /f | Out-Null
+    cmd /c "netsh int tcp set global autotuninglevel=normal >nul 2>&1" | Out-Null
+    cmd /c "netsh int tcp set global rss=enabled >nul 2>&1" | Out-Null
+    cmd /c "netsh int tcp set global timestamps=disabled >nul 2>&1" | Out-Null
+    cmd /c "ipconfig /flushdns >nul 2>&1" | Out-Null
+}
+
+function Optimize-Memory {
+    Apply-MemoryPolicy -CurrentProfile "Extreme"
+    $mem = "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
+    reg add $mem /v ClearPageFileAtShutdown /t REG_DWORD /d 0 /f | Out-Null
+    reg add $mem /v DisablePagingExecutive /t REG_DWORD /d 1 /f | Out-Null
+}
+
+function Optimize-Gpu {
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f | Out-Null
+    reg add "HKCU\System\GameConfigStore" /v GameDVR_Enabled /t REG_DWORD /d 0 /f | Out-Null
+    reg add "HKCU\System\GameConfigStore" /v GameDVR_FSEBehaviorMode /t REG_DWORD /d 2 /f | Out-Null
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" /v AllowGameDVR /t REG_DWORD /d 0 /f | Out-Null
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" /v AppCaptureEnabled /t REG_DWORD /d 0 /f | Out-Null
+}
+
+function Optimize-Storage {
+    cmd /c "fsutil behavior set disablelastaccess 1 >nul 2>&1" | Out-Null
+    cmd /c "fsutil behavior set disable8dot3 1 >nul 2>&1" | Out-Null
+    Clear-TempAndCache -CurrentProfile "Extreme"
+}
+
 function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
     $tag = "[OK]"
     $color = $S.Green
@@ -1041,6 +1105,12 @@ function Backup-Registry([string]$BackupDir) {
     Export-RegKeyIfExists "HKCU\Software\Policies\Microsoft\Windows\Explorer" (Join-Path $BackupDir "HKCU_ExplorerPolicy.reg")
     Export-RegKeyIfExists "HKCU\Software\Microsoft\Windows\CurrentVersion\PushNotifications" (Join-Path $BackupDir "HKCU_PushNotifications.reg")
     Export-RegKeyIfExists "HKCU\Software\Microsoft\Windows\CurrentVersion\Search" (Join-Path $BackupDir "HKCU_Search.reg")
+    Export-RegKeyIfExists "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" (Join-Path $BackupDir "HKLM_MultimediaSystemProfile.reg")
+    Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" (Join-Path $BackupDir "HKLM_MemoryManagement.reg")
+    Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" (Join-Path $BackupDir "HKLM_GraphicsDrivers.reg")
+    Export-RegKeyIfExists "HKCU\System\GameConfigStore" (Join-Path $BackupDir "HKCU_GameConfigStore.reg")
+    Export-RegKeyIfExists "HKLM\SOFTWARE\Policies\Microsoft\Windows\GameDVR" (Join-Path $BackupDir "HKLM_GameDVRPolicy.reg")
+    Export-RegKeyIfExists "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" (Join-Path $BackupDir "HKCU_GameDVR.reg")
 }
 
 function Get-LatestUshieBackup {
@@ -2026,6 +2096,54 @@ if ($Restore) {
     } else {
         Write-Host (Paint "   Registry restored from latest backup. Reboot to fully apply the reverted settings." $S.Green)
     }
+    exit 0
+}
+
+if ($Net) {
+    Step "Backup registry (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Optimize network / connections / packets"
+    Optimize-Network
+    Write-Detail "Applied: NetworkThrottlingIndex max, SystemResponsiveness=10, TCP autotuning normal, RSS on, timestamps off, DNS flushed."
+    Complete-StandaloneRun "Network optimized (focused). Some changes apply after reboot." $S.Green
+    Write-Host (Paint ("   Undo anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
+    exit 0
+}
+
+if ($Memory) {
+    Step "Backup registry (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Optimize memory"
+    Optimize-Memory
+    Write-Detail "Applied: MMAgent memory compression/combining, ClearPageFileAtShutdown off, DisablePagingExecutive on (16GB RAM safe)."
+    Complete-StandaloneRun "Memory optimized (focused)." $S.Green
+    Write-Host (Paint ("   Undo anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
+    exit 0
+}
+
+if ($Gpu) {
+    Step "Backup registry (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Optimize GPU"
+    Optimize-Gpu
+    Write-Detail "Applied: Hardware-Accelerated GPU Scheduling (HAGS) on, GameDVR / Game Bar capture off. Reboot to apply HAGS."
+    Complete-StandaloneRun "GPU optimized (focused). Reboot to apply HAGS." $S.Green
+    Write-Host (Paint ("   Undo anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
+    exit 0
+}
+
+if ($Storage) {
+    Step "Backup registry (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Optimize storage + clear caches"
+    Optimize-Storage
+    Write-Detail "Applied: NTFS last-access off, 8dot3 off, temp/cache cleanup."
+    Complete-StandaloneRun "Storage optimized + caches cleared (focused)." $S.Green
+    Write-Host (Paint ("   Undo anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
     exit 0
 }
 
