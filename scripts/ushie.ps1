@@ -974,6 +974,21 @@ function Show-RazerStatus {
     Write-Host ""
 }
 
+function New-UshieRestorePoint {
+    # Full OS-level checkpoint - the complete undo (reg-import only reverts changed values,
+    # it cannot delete newly-added ones, so a System Restore point is the real safety net).
+    $sysDrive = ("" + $env:SystemDrive).Trim()
+    if ([string]::IsNullOrWhiteSpace($sysDrive)) { $sysDrive = "C:" }
+    try { Enable-ComputerRestore -Drive $sysDrive -ErrorAction Stop | Out-Null } catch {}
+    reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore" /v SystemRestorePointCreationFrequency /t REG_DWORD /d 0 /f | Out-Null
+    try {
+        Checkpoint-Computer -Description "Before-Ushie-Tweaks" -RestorePointType "MODIFY_SETTINGS" -ErrorAction Stop | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function New-UshieBackup {
     $desktop = [Environment]::GetFolderPath('Desktop')
     if ([string]::IsNullOrWhiteSpace($desktop)) { $desktop = Join-Path $env:USERPROFILE "Desktop" }
@@ -981,6 +996,8 @@ function New-UshieBackup {
     $dir = Join-Path $desktop "ushie_oneshot_backup_$stamp"
     New-Item -ItemType Directory -Path $dir -Force | Out-Null
     Backup-Registry -BackupDir $dir
+    $rpOk = New-UshieRestorePoint
+    Write-Detail ("System Restore point: " + $(if ($rpOk) { "created (complete undo available)" } else { "could not create (use reg backup / enable System Protection)" }))
     return $dir
 }
 
@@ -2195,7 +2212,8 @@ if ($Restore) {
     if ([string]::IsNullOrWhiteSpace($backupDir)) {
         Write-Host (Paint "   No ushie registry backup found to undo from. Use a System Restore point above if needed." $S.Yellow)
     } else {
-        Write-Host (Paint "   Registry restored from latest backup. Reboot to fully apply the reverted settings." $S.Green)
+        Write-Host (Paint "   Registry restored from latest backup (reverts changed values)." $S.Green)
+        Write-Host (Paint "   For a COMPLETE undo (incl. newly-added keys), use a 'Before-Ushie' System Restore point above via rstrui.exe." $S.Slate)
     }
     exit 0
 }
