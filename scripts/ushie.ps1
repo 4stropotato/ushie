@@ -35,6 +35,10 @@ param(
     [switch]$Temp,
     [Alias("turbo")]
     [switch]$Boost,
+    [Alias("startupapps")]
+    [switch]$Startup,
+    [Alias("vbs")]
+    [switch]$RiskyBoost,
     [Alias("nr")]
     [switch]$NoRestore,
     [Alias("h","help","man","?")]
@@ -564,7 +568,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -586,6 +590,8 @@ function Show-Manual {
     Write-Host "  .\scripts\ushie.ps1 -Net | -Memory | -Gpu | -Storage | -Cpu [-v]"
     Write-Host "  .\scripts\ushie.ps1 -Temp"
     Write-Host "  .\scripts\ushie.ps1 -Boost [-v]"
+    Write-Host "  .\scripts\ushie.ps1 -Startup"
+    Write-Host "  .\scripts\ushie.ps1 -RiskyBoost [-v]"
     Write-Host "  .\scripts\ushie.ps1 -VerifyOnly [-v]"
     Write-Host "  .\scripts\ushie.ps1 -h"
     Write-Host ""
@@ -605,6 +611,8 @@ function Show-Manual {
     Write-Host "  -Cpu            Focused: CPU tweaks only (power-throttling off, core unpark, priority) (backs up first)"
     Write-Host "  -Temp           Read-only: CPU/GPU temperature, clocks, utilization, power draw (no admin)"
     Write-Host "  -Boost          Safe max-perf posture + thermal readout + manual undervolt/overclock playbook"
+    Write-Host "  -Startup        Read-only: list startup programs (Run keys + Startup folder) (no admin)"
+    Write-Host "  -RiskyBoost     OPT-IN: disable VBS/Memory Integrity for gaming FPS (lowers a security layer)"
     Write-Host "  -Dns            DNS preset (Auto default)"
     Write-Host "  -DnsServers     Manual DNS override list (highest priority)"
     Write-Host "  -KeepWSL        Do not disable WSL / VirtualMachinePlatform"
@@ -1118,6 +1126,56 @@ function Show-UndervoltPlaybook {
     Write-Host "     - Run  -Temp  before and after to compare."
 }
 
+function Optimize-Latency {
+    # USB selective suspend off + PCIe ASPM off (lower latency, plugged-in) + Windows Game Mode on.
+    cmd /c "powercfg -setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0 >nul 2>&1" | Out-Null
+    cmd /c "powercfg -setacvalueindex SCHEME_CURRENT 501a4d13-42af-4429-9fd1-a8218c268e20 ee12f906-d277-404b-b6da-e5fa1a576df5 0 >nul 2>&1" | Out-Null
+    cmd /c "powercfg -setactive SCHEME_CURRENT >nul 2>&1" | Out-Null
+    reg add "HKCU\Software\Microsoft\GameBar" /v AutoGameModeEnabled /t REG_DWORD /d 1 /f | Out-Null
+    reg add "HKCU\Software\Microsoft\GameBar" /v AllowAutoGameMode /t REG_DWORD /d 1 /f | Out-Null
+}
+
+function Disable-VBS {
+    # Virtualization-Based Security / Memory Integrity off. Real gaming gain, but lowers a security layer.
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard" /v EnableVirtualizationBasedSecurity /t REG_DWORD /d 0 /f | Out-Null
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity" /v Enabled /t REG_DWORD /d 0 /f | Out-Null
+}
+
+function Show-StartupApps {
+    Write-Host ""
+    Write-Host (Paint "   STARTUP PROGRAMS (read-only)" $S.NeonBlue)
+    Write-Host (Paint "   ---------------------------" $S.Gray)
+    $keys = @(
+        @{ Path = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'; Tag = 'HKCU' },
+        @{ Path = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'; Tag = 'HKLM' },
+        @{ Path = 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'; Tag = 'HKLM32' }
+    )
+    $count = 0
+    foreach ($k in $keys) {
+        if (Test-Path $k.Path) {
+            $props = Get-ItemProperty -Path $k.Path -ErrorAction SilentlyContinue
+            if ($null -ne $props) {
+                foreach ($pr in $props.PSObject.Properties) {
+                    if ($pr.Name -notmatch '^PS(Path|ParentPath|ChildName|Drive|Provider)$') {
+                        Write-Host ("   [" + $k.Tag + "] " + $pr.Name)
+                        $count++
+                    }
+                }
+            }
+        }
+    }
+    $startupFolder = [Environment]::GetFolderPath('Startup')
+    if (-not [string]::IsNullOrWhiteSpace($startupFolder) -and (Test-Path $startupFolder)) {
+        foreach ($f in @(Get-ChildItem -Path $startupFolder -ErrorAction SilentlyContinue)) {
+            Write-Host ("   [Startup folder] " + $f.Name)
+            $count++
+        }
+    }
+    if ($count -eq 0) { Write-Host (Paint "   (no user/machine startup entries found)" $S.Gray) }
+    Write-Host ""
+    Write-Host (Paint "   To disable one: Task Manager > Startup apps, or Settings > Apps > Startup." $S.Slate)
+}
+
 function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
     $tag = "[OK]"
     $color = $S.Green
@@ -1221,6 +1279,8 @@ function Backup-Registry([string]$BackupDir) {
     Export-RegKeyIfExists "HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR" (Join-Path $BackupDir "HKCU_GameDVR.reg")
     Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" (Join-Path $BackupDir "HKLM_PriorityControl.reg")
     Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling" (Join-Path $BackupDir "HKLM_PowerThrottling.reg")
+    Export-RegKeyIfExists "HKCU\Software\Microsoft\GameBar" (Join-Path $BackupDir "HKCU_GameBar.reg")
+    Export-RegKeyIfExists "HKLM\SYSTEM\CurrentControlSet\Control\DeviceGuard" (Join-Path $BackupDir "HKLM_DeviceGuard.reg")
 }
 
 function Get-LatestUshieBackup {
@@ -2171,6 +2231,12 @@ if ($Temp) {
     exit 0
 }
 
+if ($Startup) {
+    Show-Banner
+    Show-StartupApps
+    exit 0
+}
+
 Assert-Admin
 $dnsServersText = ""
 if ($DnsServers -and $DnsServers.Count -gt 0) {
@@ -2285,13 +2351,29 @@ if ($Boost) {
     Step "Apply safe max-performance posture (no hardware risk)"
     $boostPlan = Set-MaxPerformancePlan
     Optimize-Cpu
-    Write-Detail ("Applied: max-performance power plan (" + $boostPlan + "), CPU power throttling off, core unparking, foreground priority boost.")
+    Optimize-Latency
+    Write-Detail ("Applied: max-performance power plan (" + $boostPlan + "), CPU power throttling off, core unparking, foreground priority boost, USB selective suspend off, PCIe ASPM off, Game Mode on.")
     Step "Thermal / performance readout"
     Show-ThermalReadout
     Complete-StandaloneRun "Safe performance boost applied. Undervolt/overclock is MANUAL - see playbook below." $S.Green
     Show-UndervoltPlaybook
     Write-Host ""
     Write-Host (Paint ("   Undo the safe tweaks anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
+    exit 0
+}
+
+if ($RiskyBoost) {
+    Step "Backup registry + System Restore point (safety)"
+    $catBackup = New-UshieBackup
+    Write-Detail ("Backup folder: " + $catBackup)
+    Step "Disable VBS / Memory Integrity + latency tweaks (RISKY)"
+    Disable-VBS
+    Optimize-Latency
+    Write-Detail "Disabled Virtualization-Based Security + HVCI Memory Integrity; applied USB/PCIe latency + Game Mode. Reboot required."
+    Complete-StandaloneRun "RISKY BOOST applied: VBS / Memory Integrity OFF. Reboot to take effect." $S.Yellow
+    Write-Host (Paint "   WARNING: this lowers a Windows security layer (Core Isolation). Only worth it for gaming FPS." $S.NeonPink)
+    Write-Host (Paint "   Re-enable via Windows Security > Core Isolation, OR a 'Before-Ushie' System Restore point." $S.Slate)
+    Write-Host (Paint ("   Undo (safe tweaks):  -Restore   (backup: " + $catBackup + ")") $S.Slate)
     exit 0
 }
 
@@ -2637,7 +2719,8 @@ Write-Host $activeSchemeLine
 if ($script:RunProfile -eq "Extreme") {
     Step "Apply extra CPU responsiveness tweaks"
     Optimize-Cpu
-    Write-Detail "Applied: CPU power throttling off, foreground priority boost (Win32PrioritySeparation=38), core unparking (100% min cores)."
+    Optimize-Latency
+    Write-Detail "Applied: CPU power throttling off, foreground priority boost (Win32PrioritySeparation=38), core unparking (100% min cores), USB selective suspend off, PCIe ASPM off, Game Mode on."
 }
 
 if ($script:RunProfile -eq "Extreme") {
