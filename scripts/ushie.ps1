@@ -2925,6 +2925,11 @@ if ($script:RunProfile -eq "Extreme") {
     Optimize-Cpu
     Optimize-Latency
     Write-Detail "Applied: CPU power throttling off, foreground priority boost (Win32PrioritySeparation=38), core unparking (100% min cores), USB selective suspend off, PCIe ASPM off, Game Mode on."
+    Step "Apply GPU + memory tweaks + ASUS Turbo"
+    Optimize-Gpu
+    Optimize-Memory
+    $asusExtreme = Set-AsusTurbo -Policy 1
+    Write-Detail ("Applied: HAGS on, GameDVR off, memory paging tweaks (DisablePagingExecutive). ASUS ROG Turbo: " + $(if ($asusExtreme) { "ON (max CPU/GPU power + fan)" } else { "n/a (not an ASUS ROG system)" }) + ".")
     Step "Debloat non-essential services (conservative, RDP-safe)"
     Optimize-Services
     Write-Detail "Disabled telemetry/remote services; set unused ones to Manual. Network/RDP/audio/search/security untouched."
