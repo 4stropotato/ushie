@@ -37,6 +37,8 @@ param(
     [switch]$Temp,
     [Alias("turbo")]
     [switch]$Boost,
+    [Alias("asus","rog")]
+    [switch]$AsusTurbo,
     [Alias("startupapps")]
     [switch]$Startup,
     [Alias("vbs")]
@@ -574,7 +576,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerKill) { "RAZER KILL-ALL (OFF)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($StartupClean) { "STARTUP CLEAN (KEEP ALLOWLIST)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerKill) { "RAZER KILL-ALL (OFF)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($AsusTurbo) { "ASUS TURBO (MAX PERF)" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($StartupClean) { "STARTUP CLEAN (KEEP ALLOWLIST)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -621,6 +623,7 @@ function Show-Manual {
     Write-Host "  -Cpu            Focused: CPU tweaks only (power-throttling off, core unpark, priority) (backs up first)"
     Write-Host "  -Temp           Read-only: CPU/GPU temperature, clocks, utilization, power draw (no admin)"
     Write-Host "  -Boost          Safe max-perf posture + thermal readout + manual undervolt/overclock playbook"
+    Write-Host "  -AsusTurbo      ASUS ROG Turbo mode via hardware WMI (max CPU/GPU power + fan) + High-Perf plan + auto-apply on boot"
     Write-Host "  -Startup        Read-only: list startup programs (Run keys + Startup folder) (no admin)"
     Write-Host "  -RiskyBoost     OPT-IN: disable VBS/Memory Integrity for gaming FPS (lowers a security layer)"
     Write-Host "  -Services       Debloat non-essential services (conservative, Manual-first, RDP-safe, reversible)"
@@ -1263,6 +1266,41 @@ function Show-StartupApps {
     if ($count -eq 0) { Write-Host (Paint "   (no user/machine startup entries found)" $S.Gray) }
     Write-Host ""
     Write-Host (Paint "   To disable one: Task Manager > Startup apps, or Settings > Apps > Startup." $S.Slate)
+}
+
+function Get-AsusWmi {
+    try { return Get-CimInstance -Namespace root/wmi -ClassName AsusAtkWmi_WMNB -ErrorAction Stop } catch { return $null }
+}
+
+function Set-AsusTurbo([int]$Policy = 1) {
+    # ASUS throttle_thermal_policy (0x00120075): 0=Balanced, 1=Turbo, 2=Silent. Same interface as Armoury Crate / G-Helper.
+    $atk = Get-AsusWmi
+    if ($null -eq $atk) { return $false }
+    try {
+        $r = Invoke-CimMethod -InputObject $atk -MethodName DEVS -Arguments @{ Control_status = [uint32]$Policy; Device_ID = [uint32]0x00120075 } -ErrorAction Stop
+        return ($r.ReturnValue -eq $true)
+    } catch { return $false }
+}
+
+function Get-AsusTurboState {
+    $atk = Get-AsusWmi
+    if ($null -eq $atk) { return -1 }
+    try {
+        $r = Invoke-CimMethod -InputObject $atk -MethodName DSTS -Arguments @{ Device_ID = [uint32]0x00120075 } -ErrorAction Stop
+        return ([int]$r.device_status -band 0xFF)
+    } catch { return -1 }
+}
+
+function Register-UshieTurboTask {
+    # Logon task (NOT a running service) that re-applies ASUS Turbo each boot, since it can reset without the ASUS service.
+    try {
+        $arg = '-NoProfile -WindowStyle Hidden -Command "try { $a=Get-CimInstance -Namespace root/wmi -ClassName AsusAtkWmi_WMNB; Invoke-CimMethod -InputObject $a -MethodName DEVS -Arguments @{Control_status=[uint32]1;Device_ID=[uint32]1179765} | Out-Null } catch {}"'
+        $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
+        $trigger = New-ScheduledTaskTrigger -AtLogOn
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest -LogonType Interactive
+        Register-ScheduledTask -TaskName "ushie-Turbo" -Action $action -Trigger $trigger -Principal $principal -Force -ErrorAction Stop | Out-Null
+        return $true
+    } catch { return $false }
 }
 
 function Print-Result([string]$Name, [object]$Value, [string]$Level = "OK") {
@@ -2451,6 +2489,38 @@ if ($Boost) {
     Show-UndervoltPlaybook
     Write-Host ""
     Write-Host (Paint ("   Undo the safe tweaks anytime:  -Restore   (backup: " + $catBackup + ")") $S.Slate)
+    exit 0
+}
+
+if ($AsusTurbo) {
+    Step "Set ASUS ROG Turbo mode (hardware WMI)"
+    $tBefore = Get-AsusTurboState
+    $tOk = Set-AsusTurbo -Policy 1
+    Start-Sleep -Milliseconds 600
+    $tAfter = Get-AsusTurboState
+    if ($tOk) {
+        Write-Detail ("ASUS throttle policy set to TURBO (before=" + $tBefore + ", now=" + $tAfter + "). Fan ramps up automatically; CPU/GPU power limits maxed.")
+    } else {
+        Write-Detail "ASUS ACPI WMI not available (not an ASUS ROG system, or the ASUS System Control Interface driver is missing) - Turbo skipped."
+    }
+
+    Step "Set max performance power plan"
+    $planGuid = Set-MaxPerformancePlan
+    Write-Detail ("Power plan set (" + $planGuid + "). Note: Ultimate Performance is OEM-blocked on many laptops; High Performance is the max standard plan and delivers the same gaming clocks.")
+
+    Step "Register logon task to re-apply Turbo on boot"
+    $taskOk = Register-UshieTurboTask
+    Write-Detail ("Logon task 'ushie-Turbo' " + $(if ($taskOk) { "registered - Turbo auto-re-applies every boot" } else { "could not be registered" }) + ".")
+
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) { Clear-Host; Show-Banner }
+    Write-Host ""
+    if ($tOk) {
+        Write-Host (Paint "   ASUS TURBO ON + max performance plan. Fan should ramp up (that = Turbo active)." $S.Green)
+    } else {
+        Write-Host (Paint "   ASUS WMI unavailable - applied max power plan only." $S.Yellow)
+    }
+    Write-Host (Paint "   Auto-applies every boot via the 'ushie-Turbo' logon task. Revert: remove that task + set Balanced." $S.Slate)
     exit 0
 }
 
