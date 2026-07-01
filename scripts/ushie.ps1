@@ -1274,6 +1274,19 @@ function Show-StartupApps {
     Write-Host (Paint "   To disable one: Task Manager > Startup apps, or Settings > Apps > Startup." $S.Slate)
 }
 
+function Set-GamingPriority {
+    # Give gaming/stream apps HIGH CPU priority so nothing competes for cores. High (not Realtime -
+    # Realtime can freeze the OS). Auto-reverts when the app restarts.
+    $high = @('dota2', 'LiveStudio', 'voicemeeter8', 'voicemeeter', 'discord', 'obs64', 'obs')
+    $done = @()
+    foreach ($n in $high) {
+        Get-Process -Name $n -ErrorAction SilentlyContinue | ForEach-Object {
+            try { $_.PriorityClass = [System.Diagnostics.ProcessPriorityClass]::High; $done += $_.Name } catch {}
+        }
+    }
+    return @($done | Select-Object -Unique)
+}
+
 function Optimize-GamingClose {
     # Close non-essential apps for a solo gaming/stream session. SAFE: only closes processes that
     # have a visible main window (user apps) and are NOT in the keep-list, plus a few known headless
@@ -2575,6 +2588,10 @@ if ($GameMode) {
     Step "Close non-essential apps (keep gaming/stream allowlist + Windows core)"
     $gmClosed = @(Optimize-GamingClose)
     Write-Detail ("Closed " + $gmClosed.Count + " non-essential app(s). Kept: Voicemeeter, EarTrumpet, Discord, Steam, Dota2, TikTok Live Studio, Brave, Razer (macros), Tailscale, NVIDIA + Windows core.")
+
+    Step "Give gaming/stream apps HIGH CPU priority (no competition)"
+    $gmPrio = @(Set-GamingPriority)
+    Write-Detail ("Set HIGH priority so nothing competes for CPU: " + $(if ($gmPrio.Count -gt 0) { ($gmPrio -join ', ') } else { "(no target apps running yet - launch Dota/stream, then re-run -GameMode)" }) + ".")
 
     Complete-SectionSpinner
     if (-not $VerboseOutput) { Clear-Host; Show-Banner }
