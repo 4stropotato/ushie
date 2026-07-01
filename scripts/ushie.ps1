@@ -39,6 +39,10 @@ param(
     [switch]$Boost,
     [Alias("asus","rog")]
     [switch]$AsusTurbo,
+    [Alias("game")]
+    [switch]$GameMode,
+    [Alias("gameoff","goff")]
+    [switch]$GameModeOff,
     [Alias("startupapps")]
     [switch]$Startup,
     [Alias("vbs")]
@@ -576,7 +580,7 @@ function Show-Banner {
         }
     }
     Write-Host (Paint "               USHIE ONE-SHOT LATENCY OPTIMIZER" $S.NeonPink)
-    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerKill) { "RAZER KILL-ALL (OFF)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($AsusTurbo) { "ASUS TURBO (MAX PERF)" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($StartupClean) { "STARTUP CLEAN (KEEP ALLOWLIST)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
+    $runMode = if ($Manual) { "MANUAL / HELP" } elseif ($RemoteFix) { "REMOTE ACCESS REPAIR" } elseif ($FixRazer) { "RAZER SYNAPSE REPAIR" } elseif ($RazerGaming) { "RAZER GAMING (MIN RESOURCES)" } elseif ($RazerOn) { "RAZER RESTORE (FULL)" } elseif ($RazerKill) { "RAZER KILL-ALL (OFF)" } elseif ($RazerStatus) { "RAZER STATUS (READ-ONLY)" } elseif ($Restore) { "RESTORE / UNDO" } elseif ($Net) { "NETWORK BOOST (FOCUSED)" } elseif ($Memory) { "MEMORY BOOST (FOCUSED)" } elseif ($Gpu) { "GPU BOOST (FOCUSED)" } elseif ($Storage) { "STORAGE BOOST (FOCUSED)" } elseif ($Cpu) { "CPU BOOST (FOCUSED)" } elseif ($Temp) { "THERMAL MONITOR (READ-ONLY)" } elseif ($Boost) { "SAFE BOOST + PLAYBOOK" } elseif ($AsusTurbo) { "ASUS TURBO (MAX PERF)" } elseif ($GameMode) { "GAMING MODE (MAX + MINIMAL)" } elseif ($GameModeOff) { "GAMING MODE OFF (RELEASE)" } elseif ($Startup) { "STARTUP APPS (READ-ONLY)" } elseif ($RiskyBoost) { "RISKY BOOST (VBS OFF)" } elseif ($Services) { "SERVICES DEBLOAT" } elseif ($StartupClean) { "STARTUP CLEAN (KEEP ALLOWLIST)" } elseif ($VerifyOnly) { "VERIFY-ONLY (READ-ONLY)" } else { "APPLY ALL-IN-ONE" }
     Write-Host (Paint "               NO PERSISTENT BACKGROUND SERVICES" $S.NeonPink)
     Write-Host (Paint ("               MODE: " + $script:RunProfile + "   VERBOSE: " + $(if ($VerboseOutput) { "ON" } else { "OFF" })) $S.Slate)
     Write-Host (Paint ("               RUN MODE: " + $runMode) $S.Slate)
@@ -624,6 +628,8 @@ function Show-Manual {
     Write-Host "  -Temp           Read-only: CPU/GPU temperature, clocks, utilization, power draw (no admin)"
     Write-Host "  -Boost          Safe max-perf posture + thermal readout + manual undervolt/overclock playbook"
     Write-Host "  -AsusTurbo      ASUS ROG Turbo mode via hardware WMI (max CPU/GPU power + fan) + High-Perf plan + auto-apply on boot"
+    Write-Host "  -GameMode       Solo gaming/stream: max boost (Turbo+GPU+CPU) + close non-essential apps (keeps allowlist + Windows core)"
+    Write-Host "  -GameModeOff    Release GameMode: back to Balanced power + quiet fan; everything runs normally again"
     Write-Host "  -Startup        Read-only: list startup programs (Run keys + Startup folder) (no admin)"
     Write-Host "  -RiskyBoost     OPT-IN: disable VBS/Memory Integrity for gaming FPS (lowers a security layer)"
     Write-Host "  -Services       Debloat non-essential services (conservative, Manual-first, RDP-safe, reversible)"
@@ -1266,6 +1272,39 @@ function Show-StartupApps {
     if ($count -eq 0) { Write-Host (Paint "   (no user/machine startup entries found)" $S.Gray) }
     Write-Host ""
     Write-Host (Paint "   To disable one: Task Manager > Startup apps, or Settings > Apps > Startup." $S.Slate)
+}
+
+function Optimize-GamingClose {
+    # Close non-essential apps for a solo gaming/stream session. SAFE: only closes processes that
+    # have a visible main window (user apps) and are NOT in the keep-list, plus a few known headless
+    # limiters. Windows core / system processes have no targeted window here and are keep-listed.
+    $keep = @(
+        'voicemeeter','eartrumpet','discord','steam','dota2','livestudio','tiktok','brave','obs',
+        'razer','rz','gamemanager','tailscale','nvidia','nvcontainer','nvdisplay','nvsphelper',
+        'explorer','dwm','sihost','ctfmon','taskhost','runtimebroker','startmenu','searchhost','searchapp',
+        'textinputhost','shellexperiencehost','applicationframehost','systemsettings','dllhost','conhost',
+        'windowsterminal','openconsole','powershell','pwsh','claude','node','python','csrss','wininit',
+        'winlogon','lsass','svchost','fontdrvhost','audiodg','securityhealth','msmpeng','msedgewebview'
+    )
+    $bloat = @('processlasso','processgovernor','glasswire','ollama')
+    $closed = @()
+    foreach ($proc in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and -not [string]::IsNullOrWhiteSpace($_.MainWindowTitle) })) {
+        $n = $proc.Name.ToLower()
+        $isKeep = $false
+        foreach ($w in $keep) { if ($n -like ("*" + $w + "*")) { $isKeep = $true; break } }
+        if (-not $isKeep) {
+            try { $proc.CloseMainWindow() | Out-Null } catch {}
+            Start-Sleep -Milliseconds 150
+            if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+            $closed += $proc.Name
+        }
+    }
+    foreach ($b in $bloat) {
+        Get-Process -Name $b -ErrorAction SilentlyContinue | ForEach-Object {
+            try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; $closed += $_.Name } catch {}
+        }
+    }
+    return @($closed | Select-Object -Unique)
 }
 
 function Get-AsusWmi {
@@ -2521,6 +2560,40 @@ if ($AsusTurbo) {
         Write-Host (Paint "   ASUS WMI unavailable - applied max power plan only." $S.Yellow)
     }
     Write-Host (Paint "   Auto-applies every boot via the 'ushie-Turbo' logon task. Revert: remove that task + set Balanced." $S.Slate)
+    exit 0
+}
+
+if ($GameMode) {
+    Step "Apply MAX gaming boost (Turbo + max plan + CPU/latency/GPU)"
+    $gmPlan = Set-MaxPerformancePlan
+    Optimize-Cpu
+    Optimize-Latency
+    Optimize-Gpu
+    $gmAsus = Set-AsusTurbo -Policy 1
+    Write-Detail ("Max power plan (" + $gmPlan + "), CPU/latency/GPU tweaks, ASUS Turbo: " + $(if ($gmAsus) { "ON" } else { "n/a (not ASUS)" }) + ".")
+
+    Step "Close non-essential apps (keep gaming/stream allowlist + Windows core)"
+    $gmClosed = @(Optimize-GamingClose)
+    Write-Detail ("Closed " + $gmClosed.Count + " non-essential app(s). Kept: Voicemeeter, EarTrumpet, Discord, Steam, Dota2, TikTok Live Studio, Brave, Razer (macros), Tailscale, NVIDIA + Windows core.")
+
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) { Clear-Host; Show-Banner }
+    Write-Host ""
+    Write-Host (Paint ("   GAMING MODE ON: max boost + " + $gmClosed.Count + " app(s) closed. Solo Dota + TikTok Live ready.") $S.Green)
+    if ($gmClosed.Count -gt 0) { Write-Host (Paint ("   Closed: " + (($gmClosed | Select-Object -First 15) -join ', ')) $S.Slate) }
+    Write-Host (Paint "   Release when done:  -GameModeOff  (back to Balanced/quiet)." $S.Slate)
+    exit 0
+}
+
+if ($GameModeOff) {
+    Step "Release GameMode (back to normal / quiet)"
+    $offAsus = Set-AsusTurbo -Policy 0
+    cmd /c "powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e"
+    Write-Detail ("ASUS mode -> Balanced (" + $(if ($offAsus) { "ok" } else { "n/a" }) + "); power plan -> Balanced. Previously-closed apps relaunch normally when you open them.")
+    Complete-SectionSpinner
+    if (-not $VerboseOutput) { Clear-Host; Show-Banner }
+    Write-Host ""
+    Write-Host (Paint "   GameMode released: Balanced power + quiet fan. Everything can run normally again." $S.Green)
     exit 0
 }
 
