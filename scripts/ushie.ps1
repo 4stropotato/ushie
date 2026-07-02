@@ -1317,6 +1317,12 @@ function Optimize-GamingClose {
             try { Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue; $closed += $_.Name } catch {}
         }
     }
+    # Stop known limiter/monitor SERVICES too (they relaunch their app otherwise). Not disabled - just stopped for the session.
+    foreach ($svc in @('ProcessGovernor', 'GlassWire')) {
+        if ($null -ne (Get-Service -Name $svc -ErrorAction SilentlyContinue)) {
+            try { Stop-Service -Name $svc -Force -ErrorAction SilentlyContinue; $closed += ($svc + '(svc)') } catch {}
+        }
+    }
     return @($closed | Select-Object -Unique)
 }
 
@@ -1346,7 +1352,7 @@ function Get-AsusTurboState {
 function Register-UshieTurboTask {
     # Logon task (NOT a running service) that re-applies ASUS Turbo each boot, since it can reset without the ASUS service.
     try {
-        $arg = '-NoProfile -WindowStyle Hidden -Command "try { $a=Get-CimInstance -Namespace root/wmi -ClassName AsusAtkWmi_WMNB; Invoke-CimMethod -InputObject $a -MethodName DEVS -Arguments @{Control_status=[uint32]1;Device_ID=[uint32]1179765} | Out-Null } catch {}"'
+        $arg = '-NoProfile -WindowStyle Hidden -Command "try { $a=Get-CimInstance -Namespace root/wmi -ClassName AsusAtkWmi_WMNB; Invoke-CimMethod -InputObject $a -MethodName DEVS -Arguments @{Control_status=[uint32]1;Device_ID=[uint32]1179765} | Out-Null } catch {}; powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"'
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
         $trigger = New-ScheduledTaskTrigger -AtLogOn
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest -LogonType Interactive
