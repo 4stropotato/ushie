@@ -1350,9 +1350,12 @@ function Get-AsusTurboState {
 }
 
 function Register-UshieTurboTask {
-    # Logon task (NOT a running service) that re-applies ASUS Turbo each boot, since it can reset without the ASUS service.
+    # Logon task (NOT a running service) that re-applies ASUS Turbo + the max power plan each boot.
     try {
-        $arg = '-NoProfile -WindowStyle Hidden -Command "try { $a=Get-CimInstance -Namespace root/wmi -ClassName AsusAtkWmi_WMNB; Invoke-CimMethod -InputObject $a -MethodName DEVS -Arguments @{Control_status=[uint32]1;Device_ID=[uint32]1179765} | Out-Null } catch {}; powercfg /setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"'
+        # Resolve the max plan at registration time (caller ran Set-MaxPerformancePlan, so active = max).
+        $maxGuid = ([regex]::Match((powercfg /GETACTIVESCHEME | Out-String), "[0-9a-fA-F\-]{36}")).Value
+        if ([string]::IsNullOrWhiteSpace($maxGuid)) { $maxGuid = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c" }
+        $arg = '-NoProfile -WindowStyle Hidden -Command "try { $a=Get-CimInstance -Namespace root/wmi -ClassName AsusAtkWmi_WMNB; Invoke-CimMethod -InputObject $a -MethodName DEVS -Arguments @{Control_status=[uint32]1;Device_ID=[uint32]1179765} | Out-Null } catch {}; powercfg /setactive ' + $maxGuid + '"'
         $action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument $arg
         $trigger = New-ScheduledTaskTrigger -AtLogOn
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest -LogonType Interactive
@@ -1394,7 +1397,7 @@ function Set-MaxPerformancePlan {
     $guid = ""
 
     $schemesText = (powercfg /L | Out-String)
-    $uMatch = [regex]::Match($schemesText, "Power Scheme GUID:\s*([0-9a-fA-F\-]{36})\s+\(Ultimate Performance\)")
+    $uMatch = [regex]::Match($schemesText, "Power Scheme GUID:\s*([0-9a-fA-F\-]{36})\s+\(Ultimate Performance")
     if ($uMatch.Success) {
         $guid = $uMatch.Groups[1].Value
     } else {
